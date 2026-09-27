@@ -59,9 +59,13 @@ add it later.
   history depth (for the future Git Intelligence analyzer) is deferred
   precisely because it's the one thing that would require either a real
   clone or paginated API calls beyond what's needed for this slice.
-- **Memory**: bounded by capping analyzed files (`MAX_FILES = 600`) and
-  skipping content reads over 200KB — keeps a Hobby function's default
-  memory ceiling comfortable regardless of target repo size.
+- **Memory**: no cap on how many files are analyzed (an earlier `MAX_FILES =
+  600` truncated large repos silently — removed so a full repository is
+  always analyzed, not a sample of it); still skips content reads over 200KB
+  per file to avoid pulling one pathological giant file entirely into
+  memory. An exceptionally large repository can still hit the function's
+  duration limit rather than its memory limit — see the `maxDuration` note
+  above.
 - **Streaming**: Route Handlers can stream (SSE/`ReadableStream`) — noted as
   a fast-follow for perceived responsiveness ("fetching…", "analyzing…") but
   not required for v1's correctness; the frontend currently just shows a

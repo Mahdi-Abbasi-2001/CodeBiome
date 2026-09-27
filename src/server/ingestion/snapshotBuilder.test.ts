@@ -46,4 +46,37 @@ describe("buildRepositorySnapshot", () => {
       await rm(srcDir, { recursive: true, force: true });
     }
   });
+
+  it("analyzes every file in a repository larger than the old 600-file cap, not a truncated sample", async () => {
+    const srcDir = await mkdtemp(path.join(tmpdir(), "codebiome-test-src-"));
+    try {
+      const repoDir = path.join(srcDir, "demo-repo-main");
+      const fileCount = 650;
+      await mkdir(repoDir, { recursive: true });
+      for (let i = 0; i < fileCount; i++) {
+        await writeFile(path.join(repoDir, `file${i}.ts`), `export const x${i} = ${i};\n`);
+      }
+
+      const tarPath = path.join(srcDir, "repo.tar.gz");
+      await tar.c({ gzip: true, file: tarPath, cwd: srcDir }, ["demo-repo-main"]);
+      const tarball = await readFile(tarPath);
+
+      vi.mocked(fetchRepoMeta).mockResolvedValue({
+        defaultBranch: "main",
+        description: null,
+        fullName: "demo/repo",
+        headCommitSha: "abc123",
+      });
+      vi.mocked(downloadTarball).mockResolvedValue(tarball);
+
+      const { snapshot, cleanup } = await buildRepositorySnapshot("demo", "repo");
+      try {
+        expect(snapshot.files).toHaveLength(fileCount);
+      } finally {
+        await cleanup();
+      }
+    } finally {
+      await rm(srcDir, { recursive: true, force: true });
+    }
+  });
 });

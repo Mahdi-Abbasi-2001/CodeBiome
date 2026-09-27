@@ -48,10 +48,15 @@ const BINARY_EXTENSIONS = new Set([
   "bin",
 ]);
 
-// Hackathon-scope safety caps: these keep a single synchronous serverless
-// invocation well under Vercel's duration/memory limits. See
-// docs/ARCHITECTURE_DECISIONS.md for the reasoning.
-const MAX_FILES = 600;
+// No cap on how many files get walked — a repository's full file list is
+// wanted, not a truncated sample. The remaining real constraint is Vercel's
+// serverless function duration (`maxDuration` on the Hobby plan this
+// project runs on, src/app/api/bridge/[target]/route.ts): an exceptionally
+// large repository can still time out mid-analysis, but that's an honest
+// failure (visible in the response) rather than a silent, undisclosed
+// truncation. MAX_READABLE_BYTES stays — it protects against reading one
+// pathological giant file (a committed bundle, a data dump) into memory,
+// which is an unrelated concern from how many files the repo has.
 const MAX_READABLE_BYTES = 200_000;
 
 export interface SnapshotBuildResult {
@@ -84,16 +89,9 @@ export async function buildRepositorySnapshot(
 
   const files: SnapshotFile[] = [];
 
-  // Breadth-first, not depth-first: a large repo's first alphabetical
-  // top-level directory (e.g. a big "core"/"packages" tree) must not be
-  // allowed to consume the entire MAX_FILES budget before any other
-  // top-level directory is even visited. BFS processes one directory's own
-  // files at a time and queues subdirectories for later, so the cap gets
-  // distributed roughly evenly across the repo's breadth instead of being
-  // exhausted depth-first down whichever directory sorts first.
   const queue: { dir: string; relativeBase: string }[] = [{ dir: extractDir, relativeBase: "" }];
 
-  while (queue.length > 0 && files.length < MAX_FILES) {
+  while (queue.length > 0) {
     const { dir, relativeBase } = queue.shift()!;
     const entries = await readdir(dir, { withFileTypes: true });
 
@@ -112,7 +110,6 @@ export async function buildRepositorySnapshot(
       // part of the repository's real content — not a file this analysis
       // can honestly represent either way, so it's skipped, not followed.
       if (entry.isSymbolicLink() || !entry.isFile()) continue;
-      if (files.length >= MAX_FILES) break;
 
       const absolutePath = path.join(dir, entry.name);
       const relativePath = path.posix.join(relativeBase, entry.name);
