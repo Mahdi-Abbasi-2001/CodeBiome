@@ -71,6 +71,55 @@ describe("computeDomainSequence", () => {
     expect(new Set(positions).size).toBe(14); // every branch lands on a distinct point
   });
 
+  it("keeps a crowded main-sequence stop inside the canvas even when its spread direction points toward a nearby edge", async () => {
+    // Real shape found live: a domain with controller + entity stops but no
+    // service in between takes its "sideways" direction straight from the
+    // entrance waypoint (near the bottom edge) toward the data-boundary
+    // waypoint — mostly vertical, not sideways at all.7 controllers used
+    // to spread past y=900 (the canvas bottom) before this fix.
+    const files: Record<string, string> = { "user/user.entity.ts": `export class UserEntity {}\n` };
+    for (let i = 0; i < 7; i++) {
+      files[`user/controllers/c${i}.controller.ts`] = `export class C${i}Controller {}\n`;
+    }
+    const model = await buildTestKnowledgeModel(files);
+    const world = buildWorldModel(model);
+    const domains = computeDomains(world, model);
+    const user = domains.find((d) => d.name === "user")!;
+    const seq = computeDomainSequence(user, model);
+
+    const controllers = seq.buildings.filter((b) => b.role === "controller");
+    expect(controllers).toHaveLength(7);
+    for (const b of controllers) {
+      expect(b.position[1]).toBeGreaterThanOrEqual(0);
+      expect(b.position[1]).toBeLessThanOrEqual(900);
+    }
+  });
+
+  it("keeps every branch inside the fixed 1440x900 world canvas no matter how many there are", async () => {
+    // DomainView.tsx's canvas is a fixed, clipped viewBox — not pannable or
+    // zoomable — so a layout that keeps growing its radius per ring would
+    // eventually place buildings past the edge, invisible rather than just
+    // crowded. 60 is comfortably past the ~8 rings a real client/ folder hit.
+    const files: Record<string, string> = { "user/user.controller.ts": `export class UserController {}\n` };
+    for (let i = 0; i < 60; i++) {
+      files[`user/components/Widget${i}.tsx`] = `export default function Widget${i}() { return null; }\n`;
+    }
+    const model = await buildTestKnowledgeModel(files);
+    const world = buildWorldModel(model);
+    const domains = computeDomains(world, model);
+    const user = domains.find((d) => d.name === "user")!;
+    const seq = computeDomainSequence(user, model);
+
+    expect(seq.branches.length).toBe(60);
+    const margin = 80; // half a typical building's footprint
+    for (const b of seq.branches) {
+      expect(b.building.position[0]).toBeGreaterThanOrEqual(margin);
+      expect(b.building.position[0]).toBeLessThanOrEqual(1440 - margin);
+      expect(b.building.position[1]).toBeGreaterThanOrEqual(margin);
+      expect(b.building.position[1]).toBeLessThanOrEqual(900 - margin);
+    }
+  });
+
   it("marks a file with a real risk indicator as damaged", async () => {
     const model = await buildTestKnowledgeModel({
       "user/user.service.ts": `export class UserService { ${"const line = 1;\n".repeat(9000)} }\n`,

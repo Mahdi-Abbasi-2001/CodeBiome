@@ -67,6 +67,11 @@ const YARD_ORDERS = new Set([3, 4]);
 // Wide enough that two neighbors' 220px-wide labels (DomainView.tsx) don't
 // sit on top of each other — 90 was narrower than the label itself.
 const LATERAL_SPACING = 150;
+// Total width a row of siblings at one stop is allowed to occupy, however
+// many there are — the fixed 1440x900 canvas (DomainView.tsx) clips
+// anything past its edge, so unbounded growth eventually renders off-screen
+// rather than just crowded.
+const MAX_LATERAL_SPREAD = 560;
 const BRANCH_DISTANCE = 150;
 // A real domain's files rarely match a backend-shaped role at all (a React
 // feature folder full of components/hooks is entirely "function" — every
@@ -76,10 +81,41 @@ const BRANCH_DISTANCE = 150;
 // files on the exact same point. Rings keep each one spread out: a fixed
 // number of items per ring, radius growing per ring.
 const BRANCH_ITEMS_PER_RING = 6;
-const BRANCH_RING_SPACING = 130;
+// The world canvas is a FIXED 1440x900 viewBox with overflow clipped, not a
+// pannable/zoomable one (DomainView.tsx) — a ring radius that keeps growing
+// by a flat amount per ring (the original version of this fix) eventually
+// pushes outer rings past the edge of that box entirely, invisible rather
+// than just crowded. Ring spacing is computed per-domain instead (below) so
+// the OUTERMOST ring never exceeds a radius safe for THAT domain's own
+// junction position, regardless of how many branches there are — a domain
+// with many branches gets tighter rings, not ones that run off the map.
+const CANVAS_WIDTH = 1440;
+const CANVAS_HEIGHT = 900;
+const EDGE_MARGIN = 90; // roughly half a building's own footprint plus its label
+const RING_ANGLE_STAGGER = 0.18; // radians — see its use below
 
 function isYardOrder(order: number | null): boolean {
   return order !== null && YARD_ORDERS.has(order);
+}
+
+/**
+ * The largest |offset| such that `point + t*dir` stays within the canvas
+ * (minus EDGE_MARGIN) for every t in [-offset, offset] — i.e. safe for a
+ * row of siblings laid out symmetrically around `point` along `dir` in
+ * EITHER direction, not just one. A waypoint sitting close to an edge (the
+ * entrance, [430,740], is only 160px above the bottom edge) can have a very
+ * different safe distance depending on which way `dir` actually points —
+ * this is computed per-call, not assumed from the point alone.
+ */
+function maxSymmetricOffset(point: Vec2, dir: Vec2): number {
+  const axisLimit = (coord: number, d: number, high: number): number => {
+    if (Math.abs(d) < 1e-6) return Infinity;
+    return Math.min(high - EDGE_MARGIN - coord, coord - EDGE_MARGIN) / Math.abs(d);
+  };
+  return Math.max(
+    40,
+    Math.min(axisLimit(point[0], dir[0], CANVAS_WIDTH), axisLimit(point[1], dir[1], CANVAS_HEIGHT))
+  );
 }
 
 export function computeDomainSequence(domain: Domain, knowledgeModel: RepositoryKnowledgeModel): DomainSequence {
@@ -151,9 +187,17 @@ export function computeDomainSequence(domain: Domain, knowledgeModel: Repository
     if (dx === 0 && dy === 0) [dx, dy] = FALLBACK_FORWARD; // only one stop present at all — no real direction to derive
     const len = Math.hypot(dx, dy) || 1;
     const perp: Vec2 = [-dy / len, dx / len];
+    // Same fixed-canvas constraint as the branch rings below: a stop with
+    // many siblings spreading at a flat LATERAL_SPACING each would eventually
+    // run past the edge of the map — and since perp isn't always sideways
+    // (a waypoint with only ONE neighbor takes its perp from that single
+    // direction, which can point mostly vertically), the safe distance
+    // depends on where THIS stop actually is, not a single global constant.
+    const maxOffset = Math.min(MAX_LATERAL_SPREAD / 2, maxSymmetricOffset(point, perp));
+    const spacing = files.length > 1 ? Math.min(LATERAL_SPACING, (2 * maxOffset) / (files.length - 1)) : LATERAL_SPACING;
 
     files.forEach((f, j) => {
-      const offset = (j - (files.length - 1) / 2) * LATERAL_SPACING;
+      const offset = (j - (files.length - 1) / 2) * spacing;
       const position: Vec2 = [point[0] + perp[0] * offset, point[1] + perp[1] * offset];
       buildings.push({
         fileId: f.fileId,
@@ -179,13 +223,39 @@ export function computeDomainSequence(domain: Domain, knowledgeModel: Repository
   const forkPerp: Vec2 = [-forkDy / forkLen, forkDx / forkLen];
   const junction: Vec2 = [forkPoint[0] + (forkDx / forkLen) * 90, forkPoint[1] + (forkDy / forkLen) * 90];
 
+  // The fan can point in any direction depending on this domain's own
+  // fork/forward vectors, so the safe bound is the junction's distance to
+  // the NEAREST canvas edge, not a single constant tuned against one
+  // waypoint — the yard-corner waypoint ([1110,748]) has far less room on
+  // two sides than the entrance ([430,740]) does.
+  const maxRadiusFromEdges = Math.min(
+    junction[0] - EDGE_MARGIN,
+    CANVAS_WIDTH - EDGE_MARGIN - junction[0],
+    junction[1] - EDGE_MARGIN,
+    CANVAS_HEIGHT - EDGE_MARGIN - junction[1]
+  );
+  // Never actually exceed the edge-safe distance, even for ring 0 — a
+  // waypoint near the bottom edge (the entrance, [430,740]) has less than
+  // BRANCH_DISTANCE's worth of room below it, so BRANCH_DISTANCE can't be
+  // treated as an unconditional floor the way MAX_BRANCH_RADIUS used to be.
+  const safeMaxRadius = Math.max(40, Math.min(320, maxRadiusFromEdges));
+  const baseRadius = Math.min(BRANCH_DISTANCE, safeMaxRadius);
+
+  const ringCount = Math.max(1, Math.ceil(branchCandidates.length / BRANCH_ITEMS_PER_RING));
+  const ringSpacing = ringCount > 1 ? (safeMaxRadius - baseRadius) / (ringCount - 1) : 0;
+
   const branches = branchCandidates.map((f, i) => {
     const ring = Math.floor(i / BRANCH_ITEMS_PER_RING);
     const ringStart = ring * BRANCH_ITEMS_PER_RING;
     const itemsInRing = Math.min(BRANCH_ITEMS_PER_RING, branchCandidates.length - ringStart);
     const posInRing = i - ringStart;
-    const angleOffset = (posInRing - (itemsInRing - 1) / 2) * 0.5;
-    const radius = BRANCH_DISTANCE + ring * BRANCH_RING_SPACING;
+    // The ring-to-ring rotation keeps rings from exactly overlapping when a
+    // tight junction (near a canvas edge) has forced ringSpacing to ~0 —
+    // without it, a full ring reusing the exact same angles as the ring
+    // "before" it at the same radius would land every item on a duplicate
+    // of an earlier one instead of a merely tightly-packed new spot.
+    const angleOffset = (posInRing - (itemsInRing - 1) / 2) * 0.5 + ring * RING_ANGLE_STAGGER;
+    const radius = baseRadius + ring * ringSpacing;
     const dirX = forkPerp[0] * Math.cos(angleOffset) - (forkDx / forkLen) * Math.sin(angleOffset);
     const dirY = forkPerp[1] * Math.cos(angleOffset) - (forkDy / forkLen) * Math.sin(angleOffset);
     const position: Vec2 = [junction[0] + dirX * radius, junction[1] + dirY * radius];
