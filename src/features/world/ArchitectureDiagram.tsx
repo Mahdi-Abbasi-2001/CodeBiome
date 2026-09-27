@@ -85,6 +85,7 @@ function shapeForCategory(category: InfraCategory): ArchShape {
   if (category === "cache") return "diamond";
   if (category === "queue") return "queue";
   if (category === "search") return "search";
+  if (category === "external-api") return "external"; // globe/portal glyph — colorForCategory already colors it distinctly, the shape had just never been wired up, so it rendered as a plain database cylinder
   return "cylinder"; // database
 }
 

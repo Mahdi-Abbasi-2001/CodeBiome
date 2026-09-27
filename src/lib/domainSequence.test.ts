@@ -51,6 +51,26 @@ describe("computeDomainSequence", () => {
     expect(seq.junction).not.toBeNull();
   });
 
+  it("spreads many branch candidates across multiple rings instead of piling them on one point", async () => {
+    // A single ring's angle step (0.5 rad) wraps past a full turn well
+    // before 20 items — this used to land several files on the exact same
+    // coordinate. Fourteen middleware files is enough to force 3 rings at
+    // BRANCH_ITEMS_PER_RING=6.
+    const files: Record<string, string> = { "user/user.controller.ts": `export class UserController {}\n` };
+    for (let i = 0; i < 14; i++) {
+      files[`user/middlewares/mw${i}.middleware.ts`] = `export const mw${i} = () => {};\n`;
+    }
+    const model = await buildTestKnowledgeModel(files);
+    const world = buildWorldModel(model);
+    const domains = computeDomains(world, model);
+    const user = domains.find((d) => d.name === "user")!;
+    const seq = computeDomainSequence(user, model);
+
+    expect(seq.branches).toHaveLength(14);
+    const positions = seq.branches.map((b) => b.building.position.join(","));
+    expect(new Set(positions).size).toBe(14); // every branch lands on a distinct point
+  });
+
   it("marks a file with a real risk indicator as damaged", async () => {
     const model = await buildTestKnowledgeModel({
       "user/user.service.ts": `export class UserService { ${"const line = 1;\n".repeat(9000)} }\n`,
@@ -63,6 +83,24 @@ describe("computeDomainSequence", () => {
     expect(service).toBeTruthy();
     // whether it's flagged depends on the real analyzer's large-file threshold — assert the field exists and is boolean, not a fabricated truth
     expect(typeof service!.damaged).toBe("boolean");
+  });
+
+  it("recognizes frontend components and hooks as branch landmarks, even with no backend role in the domain", async () => {
+    const model = await buildTestKnowledgeModel({
+      "client/product/Products.js": `export default function Products() { return null; }\n`,
+      "client/product/api-product.js": `export const list = () => {};\n`, // not PascalCase, not a hook — stays unrecognized, same as any other helper file
+      "client/shared/useAuth.js": `export function useAuth() { return {}; }\n`,
+    });
+    const world = buildWorldModel(model);
+    const domains = computeDomains(world, model);
+    const client = domains.find((d) => d.name === "client")!;
+    const seq = computeDomainSequence(client, model);
+
+    expect(seq.isGeneric).toBe(false);
+    const roles = seq.buildings.map((b) => ({ path: b.path, role: b.role, onMainSequence: b.onMainSequence }));
+    expect(roles).toContainEqual({ path: "client/product/Products.js", role: "component", onMainSequence: false });
+    expect(roles).toContainEqual({ path: "client/shared/useAuth.js", role: "hook", onMainSequence: false });
+    expect(roles.find((r) => r.path === "client/product/api-product.js")).toBeUndefined();
   });
 
   it("returns an empty, generic sequence for a domain with no recognizable architectural roles", async () => {

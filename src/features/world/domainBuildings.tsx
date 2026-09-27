@@ -189,4 +189,6 @@ export const ROLE_LABEL: Partial<Record<BuildingRole, string>> = {
   middleware: "related, not on this path",
   "external-api": "external interface",
   event: "event",
+  component: "view / component",
+  hook: "shared logic",
 };

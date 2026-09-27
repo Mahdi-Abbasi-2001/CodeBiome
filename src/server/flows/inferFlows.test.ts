@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { inferFlows } from "./inferFlows";
+import { inferFlows, classifyLayer } from "./inferFlows";
 import { RepositoryKnowledgeModelSchema, type RepositoryKnowledgeModel, type ModuleFact, type FileFact } from "@/types/knowledge-model";
 
 function fakeFile(id: string, overrides: Partial<FileFact> = {}): FileFact {
@@ -72,6 +72,19 @@ function fakeModel(files: FileFact[], modules: ModuleFact[], dependencies: Repos
 function edge(id: string, fromId: string, toId: string, confidence = 1): RepositoryKnowledgeModel["dependencies"][number] {
   return { id, fromId, toId, fromKind: "file", toKind: "file", relationship: "imports", direction: "uses", confidence };
 }
+
+describe("classifyLayer", () => {
+  it("never mistakes a repo's frontend client/ directory for an API-client wrapper", () => {
+    expect(classifyLayer("client/App.js")).toBe("function");
+    expect(classifyLayer("client/auth/Signin.js")).toBe("function");
+  });
+
+  it("still recognizes a genuine API-client wrapper file or directory", () => {
+    expect(classifyLayer("src/api-client.ts")).toBe("external-api");
+    expect(classifyLayer("src/clients/stripeClient.ts")).toBe("external-api");
+    expect(classifyLayer("src/sdk/github.ts")).toBe("external-api");
+  });
+});
 
 describe("inferFlows", () => {
   it("builds a controller -> service -> repository -> database chain from real edges", () => {

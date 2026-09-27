@@ -48,7 +48,17 @@ const LAYER_PATTERNS: { kind: FlowStepKind; pattern: RegExp }[] = [
   // into "database", which collapsed that distinction.
   { kind: "entity", pattern: /(^|[/_.-])(entit(y|ies)|models?)([/_-]|\.|$)/i },
   { kind: "database", pattern: /(^|[/_.-])(db|database|schemas?|prisma|migrations?)([/_-]|\.|$)/i },
-  { kind: "external-api", pattern: /(^|[/_.-])(clients?|sdk|integrations?)([/_-]|\.|$)/i },
+  // A bare top-level "client" directory almost always means "the frontend
+  // application" (client/ alongside server/ — this project's own demo repo
+  // is exactly that shape) in a full-stack repo, not an API-client wrapper —
+  // matching it here misclassified EVERY file under client/ as external-api,
+  // which collapsed them all onto the same single World Map / district
+  // waypoint (found live: 55 buildings landing on one identical point).
+  // Singular "client" only counts as real evidence when it names a FILE
+  // ("api-client.ts", "stripeClient.js" — the suffix boundary requires a
+  // "." then extension to end of string, never "/"); "clients" (plural) is
+  // specific enough to still count as a directory too ("clients/stripeClient.ts").
+  { kind: "external-api", pattern: /(^|[/_.-])client\.[^/]+$|(^|[/_.-])clients([/_-]|\.|$)|(^|[/_.-])(sdk|integrations?)([/_-]|\.|$)/i },
   { kind: "event", pattern: /(^|[/_.-])(events?|emitter|pubsub|queue|producer|consumer)([/_-]|\.|$)/i },
 ];
 

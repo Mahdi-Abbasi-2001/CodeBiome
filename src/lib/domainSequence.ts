@@ -1,6 +1,6 @@
 import type { RepositoryKnowledgeModel } from "@/types/knowledge-model";
 import type { Domain } from "./domains";
-import { classifyFileRole, isMainSequenceRole, isWiringOnly, hasStructuralRisk, MAIN_SEQUENCE_ORDER, type BuildingRole } from "./buildingRoles";
+import { classifyFileRole, isMainSequenceRole, isRecognizedRole, isWiringOnly, hasStructuralRisk, MAIN_SEQUENCE_ORDER, type BuildingRole } from "./buildingRoles";
 
 export type Vec2 = [number, number];
 
@@ -56,9 +56,27 @@ const ORDER_WAYPOINTS: Record<number, Vec2> = {
   3: [1110, 635], // persistence interface, at the wall
   4: [1110, 748], // infrastructure, in the yard
 };
+// A domain with only ONE present main-sequence stop (or a branch fork with
+// nothing to point away from) has no real "next waypoint" to derive a
+// direction from — dx/dy both come out 0, which used to collapse every
+// sibling/branch at that spot onto the exact same point instead of spreading
+// them. Falls back to the canonical entrance->hub direction so there's
+// always a real 2D direction to fan out along.
+const FALLBACK_FORWARD: Vec2 = [ORDER_WAYPOINTS[1][0] - ORDER_WAYPOINTS[0][0], ORDER_WAYPOINTS[1][1] - ORDER_WAYPOINTS[0][1]];
 const YARD_ORDERS = new Set([3, 4]);
-const LATERAL_SPACING = 90;
+// Wide enough that two neighbors' 220px-wide labels (DomainView.tsx) don't
+// sit on top of each other — 90 was narrower than the label itself.
+const LATERAL_SPACING = 150;
 const BRANCH_DISTANCE = 150;
+// A real domain's files rarely match a backend-shaped role at all (a React
+// feature folder full of components/hooks is entirely "function" — every
+// one of them becomes a branch candidate here), so branch counts in the
+// dozens are the common case, not an edge case. A single ring at a fixed
+// angle step wraps past a full 2π turn well before then, landing several
+// files on the exact same point. Rings keep each one spread out: a fixed
+// number of items per ring, radius growing per ring.
+const BRANCH_ITEMS_PER_RING = 6;
+const BRANCH_RING_SPACING = 130;
 
 function isYardOrder(order: number | null): boolean {
   return order !== null && YARD_ORDERS.has(order);
@@ -80,7 +98,7 @@ export function computeDomainSequence(domain: Domain, knowledgeModel: Repository
   }
 
   const classified = candidateFiles.map((f) => ({ ...f, role: classifyFileRole(f.path) }));
-  const recognized = classified.filter((f) => isMainSequenceRole(f.role) || f.role === "middleware" || f.role === "event");
+  const recognized = classified.filter((f) => isRecognizedRole(f.role));
 
   const riskFileCount = recognized.filter((f) => {
     const file = fileById.get(f.fileId);
@@ -128,8 +146,9 @@ export function computeDomainSequence(domain: Domain, knowledgeModel: Repository
     const next = avenuePoints[i + 1] ?? point;
     // Perpendicular to the local avenue direction, so siblings at the same
     // stop spread sideways rather than stacking on the road itself.
-    const dx = next[0] - prev[0];
-    const dy = next[1] - prev[1];
+    let dx = next[0] - prev[0];
+    let dy = next[1] - prev[1];
+    if (dx === 0 && dy === 0) [dx, dy] = FALLBACK_FORWARD; // only one stop present at all — no real direction to derive
     const len = Math.hypot(dx, dy) || 1;
     const perp: Vec2 = [-dy / len, dx / len];
 
@@ -153,17 +172,23 @@ export function computeDomainSequence(domain: Domain, knowledgeModel: Repository
   // part of the primary architectural sequence."
   const forkPoint = avenuePoints[0] ?? ORDER_WAYPOINTS[0];
   const forkTarget = avenuePoints[1] ?? forkPoint;
-  const forkDx = forkTarget[0] - forkPoint[0];
-  const forkDy = forkTarget[1] - forkPoint[1];
+  let forkDx = forkTarget[0] - forkPoint[0];
+  let forkDy = forkTarget[1] - forkPoint[1];
+  if (forkDx === 0 && forkDy === 0) [forkDx, forkDy] = FALLBACK_FORWARD; // only one main-sequence stop exists — nothing to fork away from
   const forkLen = Math.hypot(forkDx, forkDy) || 1;
   const forkPerp: Vec2 = [-forkDy / forkLen, forkDx / forkLen];
   const junction: Vec2 = [forkPoint[0] + (forkDx / forkLen) * 90, forkPoint[1] + (forkDy / forkLen) * 90];
 
   const branches = branchCandidates.map((f, i) => {
-    const angleOffset = (i - (branchCandidates.length - 1) / 2) * 0.5;
+    const ring = Math.floor(i / BRANCH_ITEMS_PER_RING);
+    const ringStart = ring * BRANCH_ITEMS_PER_RING;
+    const itemsInRing = Math.min(BRANCH_ITEMS_PER_RING, branchCandidates.length - ringStart);
+    const posInRing = i - ringStart;
+    const angleOffset = (posInRing - (itemsInRing - 1) / 2) * 0.5;
+    const radius = BRANCH_DISTANCE + ring * BRANCH_RING_SPACING;
     const dirX = forkPerp[0] * Math.cos(angleOffset) - (forkDx / forkLen) * Math.sin(angleOffset);
     const dirY = forkPerp[1] * Math.cos(angleOffset) - (forkDy / forkLen) * Math.sin(angleOffset);
-    const position: Vec2 = [junction[0] + dirX * BRANCH_DISTANCE, junction[1] + dirY * BRANCH_DISTANCE];
+    const position: Vec2 = [junction[0] + dirX * radius, junction[1] + dirY * radius];
     const building: PlacedBuilding = {
       fileId: f.fileId,
       path: f.path,
