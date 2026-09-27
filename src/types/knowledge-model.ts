@@ -85,14 +85,14 @@ export const DependencyEdgeSchema = z.object({
   toId: z.string(),
   fromKind: z.enum(["file", "module"]),
   toKind: z.enum(["file", "module", "external-package"]),
-  relationship: z.enum(["imports", "calls", "extends", "http-request", "reads-writes-db", "package-dependency"]),
+  relationship: z.enum(["imports", "calls", "extends", "http-request", "navigates-to", "reads-writes-db", "package-dependency"]),
   direction: z.enum(["uses", "used-by"]),
   confidence: z.number(),
 });
 
 export const EntryPointSchema = z.object({
   id: z.string(),
-  type: z.enum(["http-route", "cli-command", "app-startup", "worker", "script", "scheduled-job"]),
+  type: z.enum(["http-route", "cli-command", "app-startup", "worker", "script", "scheduled-job", "frontend-page"]),
   name: z.string(),
   fileId: z.string(),
   detectionEvidence: z.string(),
@@ -215,10 +215,27 @@ export const LanguageStatSchema = z.object({ language: z.string(), bytes: z.numb
 
 export const FrameworkDetectionSchema = z.object({
   name: z.string(),
-  category: z.enum(["frontend", "backend", "fullstack", "mobile", "infra", "testing", "other"]),
+  category: z.enum([
+    "frontend",
+    "backend",
+    "fullstack",
+    "mobile",
+    "infra",
+    "testing",
+    "other",
+    // Specific infrastructure roles — richer than the generic "infra"
+    // bucket, so the world can render a database differently from a cache
+    // differently from a third-party API, per docs/REPOSITORY_KNOWLEDGE_MODEL.md.
+    "database",
+    "cache",
+    "queue",
+    "search",
+    "external-api",
+  ]),
   evidence: z.array(z.string()),
   confidence: z.number(),
 });
+export type FrameworkDetection = z.infer<typeof FrameworkDetectionSchema>;
 
 export const RepositoryInfoSchema = z.object({
   id: z.string(),

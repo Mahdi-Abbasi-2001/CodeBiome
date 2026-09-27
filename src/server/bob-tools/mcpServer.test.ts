@@ -37,7 +37,7 @@ describe("CodeBiome MCP server", () => {
     await seedWorld(APP, { owner: "mcp-test", repo: "app" });
   });
 
-  it("advertises all 22 Bob-facing tools with valid JSON schemas", async () => {
+  it("advertises all 24 Bob-facing tools with valid JSON schemas", async () => {
     const client = await connectedClient();
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
@@ -56,10 +56,12 @@ describe("CodeBiome MCP server", () => {
         "get_module_dependencies",
         "get_repository_overview",
         "list_domain_concepts",
+        "list_feature_plans",
         "list_flows",
         "list_onboarding_journeys",
         "open_file",
         "open_module",
+        "propose_feature_plan",
         "search_repository",
         "show_dependencies",
         "show_impact",

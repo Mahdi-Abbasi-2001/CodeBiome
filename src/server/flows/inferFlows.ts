@@ -210,9 +210,14 @@ export function inferFlows(model: RepositoryKnowledgeModel): FlowModel {
   const fileToModule = new Map<string, string>();
   for (const m of model.modules) for (const fileId of m.fileIds) fileToModule.set(fileId, m.id);
 
+  // "imports" only — a Flow is a server-side call chain through real code
+  // dependencies. `http-request`/`navigates-to` edges (frontend-call-
+  // analyzer.ts) are a different kind of hop entirely — a user-journey step
+  // between pages/requests, not "this file uses that file's exports" —
+  // and are walked separately by src/server/journeys/inferJourneys.ts.
   const outgoingByFile = new Map<string, DependencyEdge[]>();
   for (const edge of model.dependencies) {
-    if (edge.fromKind !== "file" || edge.toKind !== "file") continue;
+    if (edge.fromKind !== "file" || edge.toKind !== "file" || edge.relationship !== "imports") continue;
     if (!outgoingByFile.has(edge.fromId)) outgoingByFile.set(edge.fromId, []);
     outgoingByFile.get(edge.fromId)!.push(edge);
   }
@@ -220,7 +225,9 @@ export function inferFlows(model: RepositoryKnowledgeModel): FlowModel {
   const candidates: Flow[] = [];
   const usedNames = new Map<string, number>(); // name -> best score seen, to dedupe
 
-  for (const entryPoint of model.entryPoints) {
+  // A "frontend-page" isn't a server-side request entry point — it's the
+  // anchor journeys start from instead (inferJourneys.ts), never a Flow.
+  for (const entryPoint of model.entryPoints.filter((e) => e.type !== "frontend-page")) {
     const steps = buildChain(entryPoint, model, outgoingByFile, fileToModule);
     if (steps.length < 2) continue; // no useful chain — not worth surfacing
 

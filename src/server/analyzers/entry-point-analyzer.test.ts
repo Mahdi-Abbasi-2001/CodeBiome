@@ -95,4 +95,49 @@ describe("entry-point-analyzer", () => {
     });
     expect(entryPoints).toEqual([]);
   });
+
+  describe("frontend pages (for journey inference)", () => {
+    it("detects a Next.js App Router page and reconstructs its path from the file location", async () => {
+      const entryPoints = await entryPointsFor({
+        "src/app/verify/page.tsx": `export default function VerifyPage() { return null; }\n`,
+      });
+      expect(entryPoints).toContainEqual(
+        expect.objectContaining({ type: "frontend-page", name: "/verify", detectionEvidence: expect.stringContaining("Next.js") })
+      );
+    });
+
+    it("detects a Next.js Pages Router page, dropping a trailing index", async () => {
+      const entryPoints = await entryPointsFor({
+        "pages/orders/index.tsx": `export default function OrdersPage() { return null; }\n`,
+      });
+      expect(entryPoints).toContainEqual(expect.objectContaining({ type: "frontend-page", name: "/orders" }));
+    });
+
+    it("does not mistake a Pages Router API route for a page", async () => {
+      const entryPoints = await entryPointsFor({
+        "pages/api/orders.ts": `export default function handler(req, res) { res.json({}); }\n`,
+      });
+      expect(entryPoints.find((e) => e.type === "frontend-page")).toBeUndefined();
+    });
+
+    it("excludes Next.js framework files (_app, _document)", async () => {
+      const entryPoints = await entryPointsFor({
+        "pages/_app.tsx": `export default function App({ Component, pageProps }) { return null; }\n`,
+      });
+      expect(entryPoints.find((e) => e.type === "frontend-page")).toBeUndefined();
+    });
+
+    it("detects a React Router <Route path> declaration, disclosing the lower-confidence caveat", async () => {
+      const entryPoints = await entryPointsFor({
+        "src/App.tsx": `<Routes>\n  <Route path="/verify" element={<VerifyPage />} />\n</Routes>\n`,
+      });
+      expect(entryPoints).toContainEqual(
+        expect.objectContaining({
+          type: "frontend-page",
+          name: "/verify",
+          detectionEvidence: expect.stringContaining("not necessarily this file's own page component"),
+        })
+      );
+    });
+  });
 });

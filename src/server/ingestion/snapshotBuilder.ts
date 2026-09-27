@@ -103,13 +103,30 @@ export async function buildRepositorySnapshot(
         queue.push({ dir: path.join(dir, entry.name), relativeBase: path.posix.join(relativeBase, entry.name) });
         continue;
       }
+      // A tracked symlink (e.g. a monorepo package's `.env` symlinked to a
+      // root `.env` that's gitignored and so never actually committed)
+      // extracts as a real symlink `tar.x` writes back out as-is. Neither
+      // `isDirectory()` nor `isFile()` is true for it, so without this
+      // check it falls into the "regular file" branch below, and `stat`
+      // (which follows the link) throws ENOENT for a target that was never
+      // part of the repository's real content — not a file this analysis
+      // can honestly represent either way, so it's skipped, not followed.
+      if (entry.isSymbolicLink() || !entry.isFile()) continue;
       if (files.length >= MAX_FILES) break;
 
       const absolutePath = path.join(dir, entry.name);
       const relativePath = path.posix.join(relativeBase, entry.name);
       const ext = entry.name.includes(".") ? entry.name.split(".").pop()!.toLowerCase() : "";
       const isBinary = BINARY_EXTENSIONS.has(ext);
-      const fileStat = await stat(absolutePath);
+      let fileStat;
+      try {
+        fileStat = await stat(absolutePath);
+      } catch {
+        // Broken symlink, a file removed mid-walk, a permissions quirk in
+        // the extracted tarball — none of these should abort analysis of
+        // the other 599 files. Skip this one file instead.
+        continue;
+      }
 
       // Memoized: structure-analyzer reads every source/test/doc/config
       // file for line counts, and then whichever single language-specific

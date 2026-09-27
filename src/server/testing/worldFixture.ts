@@ -2,9 +2,11 @@ import { buildTestKnowledgeModel } from "./knowledgeModelFixture";
 import { knowledgeModelStore } from "@/server/knowledge-model/store";
 import { worldStore } from "@/server/world/worldStore";
 import { inferFlows } from "@/server/flows/inferFlows";
+import { inferJourneys } from "@/server/journeys/inferJourneys";
 import { buildWorldModel } from "@/server/world/builder";
 import type { RepositoryKnowledgeModel } from "@/types/knowledge-model";
 import type { FlowModel } from "@/types/flow";
+import type { JourneyModel } from "@/types/journey";
 import type { WorldModel } from "@/types/world-model";
 import type { WorldRecord } from "@/types/world";
 
@@ -20,18 +22,19 @@ import type { WorldRecord } from "@/types/world";
 export async function seedWorld(
   files: Record<string, string>,
   repoId: { owner: string; repo: string } = { owner: "test", repo: "repo" }
-): Promise<{ model: RepositoryKnowledgeModel; flowModel: FlowModel; worldModel: WorldModel; world: WorldRecord }> {
+): Promise<{ model: RepositoryKnowledgeModel; flowModel: FlowModel; journeyModel: JourneyModel; worldModel: WorldModel; world: WorldRecord }> {
   const model = await buildTestKnowledgeModel(files, repoId);
   await knowledgeModelStore.set(model);
 
   const flowModel = inferFlows(model);
+  const journeyModel = inferJourneys(model, flowModel);
   const worldModel = buildWorldModel(model);
   const world = await worldStore.createWorld({
     repositoryUrl: `https://github.com/${repoId.owner}/${repoId.repo}`,
     repositoryId: `${repoId.owner}/${repoId.repo}`,
     commitSha: model.meta.commitSha,
-    snapshot: { knowledgeModel: model, flowModel, worldModel },
+    snapshot: { knowledgeModel: model, flowModel, journeyModel, worldModel },
   });
 
-  return { model, flowModel, worldModel, world };
+  return { model, flowModel, journeyModel, worldModel, world };
 }

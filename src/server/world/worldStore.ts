@@ -1,4 +1,7 @@
 import { put, get } from "@vercel/blob";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import os from "node:os";
 import type { WorldRecord, WorldSnapshot, WorldMutableState } from "@/types/world";
 import { EMPTY_WORLD_MUTABLE_STATE } from "@/types/world";
 import type { BobEvent } from "@/types/bob-events";
@@ -139,6 +142,111 @@ class InMemoryWorldStore implements WorldStore {
   }
 }
 
+const LOCAL_STORE_DIR = path.join(os.tmpdir(), "codebiome-dev-world-store");
+
+function sanitizeKey(key: string): string {
+  return key.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+/**
+ * Filesystem-backed implementation — the real local-development fallback
+ * (`InMemoryWorldStore` above is used only under `vitest`, see the
+ * selection logic at the bottom of this file). A plain in-memory Map is
+ * NOT safe here: Next.js's dev server compiles route handlers on demand,
+ * and does not guarantee that two different route files (e.g.
+ * `/api/bridge/[target]`, which handles `/api/analyze`, and the separate
+ * `/api/world/[worldId]/route.ts`) share the same module instance across
+ * requests within one `next dev` process — confirmed empirically: a World
+ * created via `/api/analyze` was invisible to `/api/world/[worldId]`
+ * moments later. Only a store that lives outside any single module's
+ * memory is actually shared, so this mirrors `BlobWorldStore` one-for-one,
+ * just backed by the OS temp directory instead of Vercel Blob — the local
+ * equivalent of "durable, cross-instance" for a machine instead of a fleet.
+ */
+class FileWorldStore implements WorldStore {
+  private worldDir(worldId: string): string {
+    return path.join(LOCAL_STORE_DIR, "worlds", sanitizeKey(worldId));
+  }
+
+  private async putJson(pathname: string, data: unknown): Promise<void> {
+    await fs.mkdir(path.dirname(pathname), { recursive: true });
+    await fs.writeFile(pathname, JSON.stringify(data), "utf8");
+  }
+
+  private async getJson<T>(pathname: string): Promise<T | null> {
+    try {
+      const text = await fs.readFile(pathname, "utf8");
+      return JSON.parse(text) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  async createWorld(args: { repositoryUrl: string; repositoryId: string; commitSha: string; snapshot: Omit<WorldSnapshot, "world"> }) {
+    const world: WorldRecord = {
+      id: createWorldId(),
+      repositoryUrl: args.repositoryUrl,
+      repositoryId: args.repositoryId,
+      commitSha: args.commitSha,
+      createdAt: new Date().toISOString(),
+    };
+    const snapshot: WorldSnapshot = { world, ...args.snapshot };
+    const dir = this.worldDir(world.id);
+
+    await Promise.all([
+      this.putJson(path.join(dir, "record.json"), world),
+      this.putJson(path.join(dir, "snapshot.json"), snapshot),
+      this.putJson(path.join(dir, "state.json"), EMPTY_WORLD_MUTABLE_STATE),
+      this.putJson(path.join(LOCAL_STORE_DIR, "index", "by-repository", `${sanitizeKey(args.repositoryId)}.json`), { worldId: world.id }),
+      this.putJson(path.join(LOCAL_STORE_DIR, "index", "most-recent.json"), { worldId: world.id }),
+    ]);
+
+    return world;
+  }
+
+  async getWorld(worldId: string) {
+    return this.getJson<WorldRecord>(path.join(this.worldDir(worldId), "record.json"));
+  }
+
+  async getSnapshot(worldId: string) {
+    return this.getJson<WorldSnapshot>(path.join(this.worldDir(worldId), "snapshot.json"));
+  }
+
+  async getLatestWorldIdForRepository(repositoryId: string) {
+    const pointer = await this.getJson<{ worldId: string }>(
+      path.join(LOCAL_STORE_DIR, "index", "by-repository", `${sanitizeKey(repositoryId)}.json`)
+    );
+    return pointer?.worldId ?? null;
+  }
+
+  async getMostRecentWorldId() {
+    const pointer = await this.getJson<{ worldId: string }>(path.join(LOCAL_STORE_DIR, "index", "most-recent.json"));
+    return pointer?.worldId ?? null;
+  }
+
+  async getMutableState(worldId: string) {
+    return (await this.getJson<WorldMutableState>(path.join(this.worldDir(worldId), "state.json"))) ?? { ...EMPTY_WORLD_MUTABLE_STATE };
+  }
+
+  async updateMutableState(worldId: string, updater: (state: WorldMutableState) => WorldMutableState) {
+    const current = await this.getMutableState(worldId);
+    const next = updater(current);
+    await this.putJson(path.join(this.worldDir(worldId), "state.json"), next);
+    return next;
+  }
+
+  async appendEvent(worldId: string, event: BobEvent) {
+    const current = (await this.getJson<BobEvent[]>(path.join(this.worldDir(worldId), "events.json"))) ?? [];
+    const next = [...current, event].slice(-MAX_STORED_EVENTS);
+    await this.putJson(path.join(this.worldDir(worldId), "events.json"), next);
+  }
+
+  async getEventsSince(worldId: string, sinceIndex: number) {
+    const events = (await this.getJson<BobEvent[]>(path.join(this.worldDir(worldId), "events.json"))) ?? [];
+    return { events: events.slice(sinceIndex), latestIndex: events.length };
+  }
+}
+
 /** Vercel Blob-backed implementation — used in production (and anywhere Blob credentials are configured, via either a static token or OIDC + `BLOB_STORE_ID`). */
 class BlobWorldStore implements WorldStore {
   // Read-through/write-through cache — same data, just avoids a network
@@ -272,5 +380,15 @@ class BlobWorldStore implements WorldStore {
   }
 }
 
-export const worldStore: WorldStore =
-  process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID ? new BlobWorldStore() : new InMemoryWorldStore();
+function selectWorldStore(): WorldStore {
+  if (process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID) return new BlobWorldStore();
+  // Under vitest, a plain in-memory Map is fine (and faster, and doesn't
+  // litter the OS temp dir) — every test runs against one module instance
+  // within its own process, so there's no cross-route isolation to work
+  // around. See FileWorldStore's doc comment for why real `next dev`/`next
+  // start` needs the filesystem-backed store instead.
+  if (process.env.VITEST) return new InMemoryWorldStore();
+  return new FileWorldStore();
+}
+
+export const worldStore: WorldStore = selectWorldStore();

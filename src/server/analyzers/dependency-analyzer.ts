@@ -3,6 +3,7 @@ import type { StructureAnalyzerOutput } from "./structure-analyzer";
 import type { RepositorySnapshot } from "../ingestion/types";
 import { posixJoin } from "./pathUtils";
 import { stripCLikeComments } from "./commentUtils";
+import { matchExternalPackage } from "./infraPackages";
 
 export interface DependencyEdgeDraft {
   id: string;
@@ -10,7 +11,7 @@ export interface DependencyEdgeDraft {
   toId: string;
   fromKind: "file";
   toKind: "file" | "external-package";
-  relationship: "imports";
+  relationship: "imports" | "package-dependency" | "http-request" | "navigates-to";
   direction: "uses";
   confidence: number;
 }
@@ -243,6 +244,7 @@ export const dependencyAnalyzer: Analyzer<DependencyAnalyzerOutput> = {
       const rawContent = await snapshotFile.readContent();
       if (!rawContent) continue;
       const content = stripCLikeComments(rawContent);
+      const emittedPackages = new Set<string>();
 
       for (const match of content.matchAll(IMPORT_PATTERN)) {
         const specifier = match[1] ?? match[2] ?? match[3] ?? match[4];
@@ -252,7 +254,28 @@ export const dependencyAnalyzer: Analyzer<DependencyAnalyzerOutput> = {
           : aliasConfig
             ? resolveAliasImport(specifier, aliasConfig, allPaths)
             : null;
-        if (!target || target === file.path) continue;
+        if (!target || target === file.path) {
+          // Not an internal file — check whether it names a known real
+          // technology (a database driver, a cache client, a framework)
+          // before dropping it. A broken relative import never qualifies.
+          if (!target && !specifier.startsWith(".")) {
+            const external = matchExternalPackage(specifier);
+            if (external && !emittedPackages.has(external.id)) {
+              emittedPackages.add(external.id);
+              edges.push({
+                id: `dep-${edgeCounter++}`,
+                fromId: file.path,
+                toId: external.id,
+                fromKind: "file",
+                toKind: "external-package",
+                relationship: "package-dependency",
+                direction: "uses",
+                confidence: 1,
+              });
+            }
+          }
+          continue;
+        }
 
         edges.push({
           id: `dep-${edgeCounter++}`,

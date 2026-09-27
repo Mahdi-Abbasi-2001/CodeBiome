@@ -68,7 +68,8 @@ describe("/api/bridge/[target] (backing /api/mcp, /api/analyze, /api/session-con
       const names = body.result.tools.map((t: { name: string }) => t.name);
       expect(names).toContain("create_onboarding_journey");
       expect(names).toContain("get_current_context");
-      expect(names.length).toBe(22);
+      expect(names).toContain("propose_feature_plan");
+      expect(names.length).toBe(24);
     });
 
     it("returns 405 for GET on a POST-only target", async () => {

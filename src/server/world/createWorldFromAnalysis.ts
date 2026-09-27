@@ -20,7 +20,12 @@ export async function createWorldFromAnalysis(
     repositoryUrl: `https://github.com/${owner}/${repo}`,
     repositoryId: `${owner}/${repo}`,
     commitSha: result.knowledgeModel.meta.commitSha,
-    snapshot: { knowledgeModel: result.knowledgeModel, flowModel: result.flowModel, worldModel: result.worldModel },
+    snapshot: {
+      knowledgeModel: result.knowledgeModel,
+      flowModel: result.flowModel,
+      journeyModel: result.journeyModel,
+      worldModel: result.worldModel,
+    },
   });
   return { world, url: worldUrl(world.id) };
 }

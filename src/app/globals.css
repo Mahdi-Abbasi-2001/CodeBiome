@@ -1,0 +1,71 @@
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #0a0d12;
+  color: #f3f1ea;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+@keyframes cb-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.cb-canopy-glow {
+  animation: cb-pulse 5s ease-in-out infinite;
+}
+
+.cb-spark {
+  animation: cb-pulse 3.2s ease-in-out infinite;
+}
+
+.cb-pulse-fast {
+  animation: cb-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes cb-fade {
+  0%,
+  100% {
+    opacity: 0.22;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.cb-fade {
+  animation: cb-fade 3.4s ease-in-out infinite;
+}
+
+@keyframes cb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.cb-spin {
+  animation: cb-spin 1.1s linear infinite;
+  transform-origin: center;
+}

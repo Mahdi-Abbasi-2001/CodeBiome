@@ -5,13 +5,47 @@ import type { AnalyzerResult } from "../analyzers/types";
 import type { DependencyEdgeDraft } from "../analyzers/dependency-analyzer";
 import type { SecurityAnalyzerOutput } from "../analyzers/security-analyzer";
 import type { EntryPointAnalyzerOutput } from "../analyzers/entry-point-analyzer";
+import { lookupExternalPackage } from "../analyzers/infraPackages";
 import {
   RepositoryKnowledgeModelSchema,
   type RepositoryKnowledgeModel,
   type FileFact,
   type ModuleFact,
   type DependencyEdge,
+  type FrameworkDetection,
 } from "@/types/knowledge-model";
+
+/**
+ * Real technologies this repository depends on — databases, caches,
+ * queues, search engines, external service SDKs, and the frontend/backend
+ * frameworks themselves — derived from the SAME `package-dependency` edges
+ * the dependency analyzers already produced from actual source imports.
+ * One detection mechanism, two views of it: an edge per file that uses it
+ * (for "which code talks to this"), and this aggregate (for "what does
+ * this repository use at all").
+ */
+function detectFrameworks(dependencies: DependencyEdge[]): FrameworkDetection[] {
+  // Keyed by display name+category, not raw package id — "mysql" and
+  // "mysql2" (or "redis" and "ioredis") both name the same real
+  // technology and must collapse into one detection, not two.
+  const byTechnology = new Map<string, { name: string; category: FrameworkDetection["category"]; files: Set<string> }>();
+  for (const edge of dependencies) {
+    if (edge.toKind !== "external-package" || edge.relationship !== "package-dependency") continue;
+    const info = lookupExternalPackage(edge.toId);
+    if (!info) continue;
+    const key = `${info.name}::${info.category}`;
+    const entry = byTechnology.get(key) ?? { name: info.name, category: info.category, files: new Set<string>() };
+    entry.files.add(edge.fromId);
+    byTechnology.set(key, entry);
+  }
+
+  return [...byTechnology.values()].map((entry) => ({
+    name: entry.name,
+    category: entry.category,
+    evidence: [...entry.files],
+    confidence: 0.9,
+  }));
+}
 
 /**
  * Aggregates analyzer outputs into the full Repository Knowledge Model.
@@ -38,6 +72,7 @@ const DEPENDENCY_ANALYZER_IDS = [
   "csharp-dependency-analyzer",
   "ruby-dependency-analyzer",
   "php-dependency-analyzer",
+  "frontend-call-analyzer",
 ];
 
 function collectDependencyEdges(run: AnalyzerRunSummary): DependencyEdgeDraft[] {
@@ -153,6 +188,7 @@ export function buildKnowledgeModel(snapshot: RepositorySnapshot, run: AnalyzerR
   });
 
   const dependencies: DependencyEdge[] = edges.map((e) => ({ ...e }));
+  const frameworks = detectFrameworks(dependencies);
 
   const totalLinesOfCode = files.reduce((sum, f) => sum + f.linesOfCode, 0);
 
@@ -172,7 +208,7 @@ export function buildKnowledgeModel(snapshot: RepositorySnapshot, run: AnalyzerR
       defaultBranch: snapshot.defaultBranch,
       description: snapshot.description,
       languages: structure.languageStats,
-      frameworks: [],
+      frameworks,
       statistics: {
         fileCount: files.length,
         totalLinesOfCode,

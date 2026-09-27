@@ -9,6 +9,7 @@ import * as worldActionTools from "./worldActionTools";
 import * as domainConceptTools from "./domainConceptTools";
 import * as onboardingTools from "./onboardingTools";
 import * as analysisTools from "./analysisTools";
+import * as planTools from "./planTools";
 
 /**
  * Wires the pure functions in repositoryTools.ts / flowTools.ts /
@@ -368,5 +369,63 @@ export function registerBobTools(server: McpServer): void {
       inputSchema: { journeyId: z.string().describe("Journey id or title"), stepIndex: z.number().int().min(0), ...repoArgs },
     },
     wrapAction(onboardingTools.advanceOnboardingStep)
+  );
+
+  const featurePlanStepSchema = z.object({
+    kind: z
+      .enum(["page", "entry", "controller", "handler", "service", "entity", "function", "repository", "database", "external-api", "event", "unknown"])
+      .describe("The architectural layer this step plays."),
+    label: z.string().describe("Short human-readable label, e.g. 'Wishlist Controller'."),
+    status: z.enum(["new", "existing"]).describe("'existing' means this file already exists in the repository — verified before storage. 'new' means it would need to be created."),
+    filePath: z
+      .string()
+      .describe(
+        "If status is 'existing', this MUST exactly match a real file path you've confirmed exists (e.g. via get_file/get_module/search_repository) — a path that doesn't resolve is automatically relabeled 'new'. If status is 'new', a suggested path following the repository's real conventions."
+      ),
+    explanation: z.string().describe("One sentence: why this step is here."),
+  });
+
+  server.registerTool(
+    "propose_feature_plan",
+    {
+      title: "Propose feature plan",
+      description:
+        "Proposes how a NOT-YET-BUILT feature would likely be implemented in this repository, and what it would impact — YOUR interpretation, grounded in the real repository structure. Unlike a flow (a reconstruction of code that already exists), this describes something speculative: a mix of real existing files this feature would reuse and new files it would need. The moment you call this, the proposal is stored and rendered in the CodeBiome web app's \"Plan\" tab — the returned url opens it directly; hand that to the developer. Investigate first (get_repository_overview, find_feature, get_module, list_flows, trace_dependency_path) so every 'existing' step is grounded in something you've actually confirmed — a filePath/domain/technology reference that doesn't resolve to something real is automatically corrected (downgraded to 'new', or dropped) rather than rejecting the whole call, and every correction is disclosed back to the developer. Call list_feature_plans first to avoid proposing a near-duplicate.",
+      inputSchema: {
+        description: z.string().describe("The developer's own feature request, echoed back verbatim."),
+        name: z.string().describe("A short (1-4 word) name for the feature, e.g. 'Wishlist'."),
+        summary: z.string().describe("2-3 plain-language sentences: what this adds and what it reuses from the existing codebase."),
+        confidence: z.enum(["high", "medium", "low"]).describe("Your own confidence in this plan given how well the repository supports it — be honest."),
+        steps: z.array(featurePlanStepSchema).min(1).describe("The likely request/execution path for this feature, in order."),
+        impactedEntities: z
+          .array(
+            z.object({
+              kind: z.enum(["domain", "infra"]),
+              name: z.string().describe("Must exactly match a real domain name (from get_repository_overview/get_module) or a real detected technology name."),
+              reason: z.string(),
+            })
+          )
+          .optional()
+          .describe("Which real domains or technologies this feature would touch."),
+        newFiles: z.array(z.object({ suggestedPath: z.string(), purpose: z.string() })).optional(),
+        modifiedFiles: z
+          .array(z.object({ filePath: z.string().describe("MUST be a real, existing file path — verified before storage."), reason: z.string() }))
+          .optional()
+          .describe("Real existing files that would need to change."),
+        ...repoArgs,
+      },
+    },
+    wrapAction(planTools.proposeFeaturePlan)
+  );
+
+  server.registerTool(
+    "list_feature_plans",
+    {
+      title: "List feature plans",
+      description:
+        "Lists feature implementation plans already proposed for this repository (via propose_feature_plan in this or an earlier session) — not deterministic facts, each is Bob's own interpretation with its own confidence. Check this before proposing a new plan to avoid duplicating one that already covers the same feature.",
+      inputSchema: { ...repoArgs },
+    },
+    wrap("list_feature_plans", (_a, r: any) => `${r.plans.length} feature plan(s) on file`, planTools.listFeaturePlans)
   );
 }

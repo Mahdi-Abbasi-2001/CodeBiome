@@ -13,13 +13,16 @@ import { rubyDependencyAnalyzer } from "@/server/analyzers/ruby-dependency-analy
 import { phpDependencyAnalyzer } from "@/server/analyzers/php-dependency-analyzer";
 import { securityAnalyzer } from "@/server/analyzers/security-analyzer";
 import { entryPointAnalyzer, type EntryPointAnalyzerOutput } from "@/server/analyzers/entry-point-analyzer";
+import { frontendCallAnalyzer } from "@/server/analyzers/frontend-call-analyzer";
 import { fetchRepoMeta } from "@/server/ingestion/githubClient";
 import { buildKnowledgeModel } from "@/server/knowledge-model/builder";
 import { knowledgeModelStore } from "@/server/knowledge-model/store";
 import { buildWorldModel } from "@/server/world/builder";
 import { inferFlows } from "@/server/flows/inferFlows";
+import { inferJourneys } from "@/server/journeys/inferJourneys";
 import type { RepositoryKnowledgeModel } from "@/types/knowledge-model";
 import type { FlowModel } from "@/types/flow";
+import type { JourneyModel } from "@/types/journey";
 import type { WorldModel } from "@/types/world-model";
 import type { AnalyzeStage } from "@/types/analyze-events";
 
@@ -48,6 +51,7 @@ export interface AnalysisPipelineHooks {
 export interface AnalysisPipelineResult {
   knowledgeModel: RepositoryKnowledgeModel;
   flowModel: FlowModel;
+  journeyModel: JourneyModel;
   worldModel: WorldModel;
   cached: boolean;
 }
@@ -67,10 +71,12 @@ export async function runAnalysisPipeline(owner: string, repo: string, hooks: An
     const cachedEarly = await knowledgeModelStore.get(repositoryId, meta.headCommitSha);
     if (cachedEarly) {
       onStageDone?.("fetch", { fileCount: cachedEarly.files.length });
+      const cachedFlowModel = inferFlows(cachedEarly);
       return {
         knowledgeModel: cachedEarly,
         worldModel: buildWorldModel(cachedEarly),
-        flowModel: inferFlows(cachedEarly),
+        flowModel: cachedFlowModel,
+        journeyModel: inferJourneys(cachedEarly, cachedFlowModel),
         cached: true,
       };
     }
@@ -96,6 +102,7 @@ export async function runAnalysisPipeline(owner: string, repo: string, hooks: An
     registry.register(phpDependencyAnalyzer);
     registry.register(securityAnalyzer);
     registry.register(entryPointAnalyzer);
+    registry.register(frontendCallAnalyzer);
 
     onStageStart?.("structure");
     onStageStart?.("dependency");
@@ -134,13 +141,14 @@ export async function runAnalysisPipeline(owner: string, repo: string, hooks: An
     // dependency edges), never from raw source, never a runtime trace.
     onStageStart?.("flows");
     const flowModel = inferFlows(knowledgeModel);
-    onStageDone?.("flows", { flowCount: flowModel.flows.length });
+    const journeyModel = inferJourneys(knowledgeModel, flowModel);
+    onStageDone?.("flows", { flowCount: flowModel.flows.length, journeyCount: journeyModel.journeys.length });
 
     onStageStart?.("world");
     const worldModel = buildWorldModel(knowledgeModel);
     onStageDone?.("world", { regionCount: worldModel.regions.length, landmarkCount: worldModel.landmarks.length });
 
-    return { knowledgeModel, flowModel, worldModel, cached: false };
+    return { knowledgeModel, flowModel, journeyModel, worldModel, cached: false };
   } finally {
     if (cleanup) await cleanup();
   }

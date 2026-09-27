@@ -37,12 +37,33 @@ describe("dependency-analyzer (JS/TS)", () => {
     expect(edges).toContainEqual(expect.objectContaining({ toId: "src/helper.ts" }));
   });
 
-  it("does not create an edge for an external package import", async () => {
+  it("does not create an edge for an unrecognized external package import", async () => {
     const snapshot = fakeSnapshot({
       "src/index.ts": `import { z } from 'zod';`,
     });
     const run = await runWithStructure(snapshot, dependencyAnalyzer);
     expect(edgesFor(run, "dependency-analyzer")).toHaveLength(0);
+  });
+
+  it("creates a real external-package edge for a known infrastructure/framework import", async () => {
+    const snapshot = fakeSnapshot({
+      "src/db.ts": `import mysql from 'mysql2';\nimport Redis from 'ioredis';`,
+    });
+    const run = await runWithStructure(snapshot, dependencyAnalyzer);
+    const edges = edgesFor(run, "dependency-analyzer");
+    expect(edges).toContainEqual(
+      expect.objectContaining({ fromId: "src/db.ts", toId: "mysql2", toKind: "external-package", relationship: "package-dependency" })
+    );
+    expect(edges).toContainEqual(expect.objectContaining({ fromId: "src/db.ts", toId: "ioredis", toKind: "external-package" }));
+  });
+
+  it("strips a subpath and never emits a duplicate edge for the same package imported twice in one file", async () => {
+    const snapshot = fakeSnapshot({
+      "src/es.ts": `import { Client } from '@elastic/elasticsearch';\nimport type { ApiResponse } from '@elastic/elasticsearch/lib/Transport';`,
+    });
+    const run = await runWithStructure(snapshot, dependencyAnalyzer);
+    const edges = edgesFor(run, "dependency-analyzer").filter((e: { toId: string }) => e.toId === "@elastic/elasticsearch");
+    expect(edges).toHaveLength(1);
   });
 
   it("ignores a commented-out import line", async () => {

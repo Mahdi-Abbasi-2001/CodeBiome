@@ -1,5 +1,6 @@
 import type { RepositoryKnowledgeModel } from "@/types/knowledge-model";
 import type { FlowModel } from "@/types/flow";
+import type { WorldModel } from "@/types/world-model";
 import type { WorldRecord } from "@/types/world";
 import { worldStore, WorldNotFoundError } from "@/server/world/worldStore";
 
@@ -57,14 +58,14 @@ export async function resolveWorld(args: {
   worldId?: string;
   owner?: string;
   repo?: string;
-}): Promise<{ world: WorldRecord; knowledgeModel: RepositoryKnowledgeModel; flowModel: FlowModel }> {
+}): Promise<{ world: WorldRecord; knowledgeModel: RepositoryKnowledgeModel; flowModel: FlowModel; worldModel: WorldModel }> {
   const worldId = await resolveWorldId(args);
   const snapshot = await worldStore.getSnapshot(worldId);
   // Defensive only — getWorld()/getLatestWorldIdForRepository() already
   // succeeding means the snapshot should exist too; this guards against a
   // corrupted/partial write rather than a normal user-facing case.
   if (!snapshot) throw new WorldNotFoundError(worldId);
-  return { world: snapshot.world, knowledgeModel: snapshot.knowledgeModel, flowModel: snapshot.flowModel };
+  return { world: snapshot.world, knowledgeModel: snapshot.knowledgeModel, flowModel: snapshot.flowModel, worldModel: snapshot.worldModel };
 }
 
 /** Back-compat shape most existing tools already call — now backed by World resolution instead of a bare in-memory cache. */

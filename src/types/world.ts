@@ -1,7 +1,9 @@
 import type { RepositoryKnowledgeModel, DomainConcept } from "./knowledge-model";
 import type { FlowModel } from "./flow";
+import type { JourneyModel } from "./journey";
 import type { WorldModel } from "./world-model";
 import type { OnboardingJourney } from "./onboarding";
+import type { FeaturePlan } from "./featurePlan";
 
 /**
  * A CodeBiome World (docs/WORLD_ARCHITECTURE.md) — one repository analysis,
@@ -23,6 +25,8 @@ export interface WorldSnapshot {
   world: WorldRecord;
   knowledgeModel: RepositoryKnowledgeModel;
   flowModel: FlowModel;
+  /** Multi-request user journeys built on top of flowModel — see src/types/journey.ts. */
+  journeyModel: JourneyModel;
   worldModel: WorldModel;
 }
 
@@ -57,10 +61,13 @@ export interface WorldMutableState {
   sessionContext: WorldSessionContext | null;
   domainConcepts: DomainConcept[];
   onboardingJourneys: OnboardingJourney[];
+  /** Bob-proposed feature implementation plans — see src/types/featurePlan.ts and the "Plan" tab. */
+  featurePlans: FeaturePlan[];
 }
 
 export const EMPTY_WORLD_MUTABLE_STATE: WorldMutableState = {
   sessionContext: null,
   domainConcepts: [],
   onboardingJourneys: [],
+  featurePlans: [],
 };

@@ -4,7 +4,7 @@ import { stripCLikeComments } from "./commentUtils";
 
 export interface EntryPointCandidate {
   id: string;
-  type: "http-route" | "cli-command" | "app-startup" | "worker" | "script" | "scheduled-job";
+  type: "http-route" | "cli-command" | "app-startup" | "worker" | "script" | "scheduled-job" | "frontend-page";
   name: string;
   fileId: string;
   detectionEvidence: string;
@@ -46,6 +46,48 @@ const ROUTE_PATTERNS: { framework: string; pattern: RegExp }[] = [
   // Rust actix-web / axum
   { framework: "Rust web", pattern: /#\[(?:get|post|put|delete|patch)\(\s*"([^"]+)"/g },
   { framework: "Rust web", pattern: /\.route\s*\(\s*"([^"]+)"/g },
+];
+
+/**
+ * A frontend "page" — a real screen a website user can land on, the
+ * counterpart to a backend `http-route` — is the anchor journey inference
+ * (src/server/journeys/inferJourneys.ts) needs to stitch multi-request user
+ * operations together (see docs on JourneyModel, src/types/journey.ts).
+ * Bounded, disclosed detection, same tradeoff as ROUTE_PATTERNS above: the
+ * Next.js file-convention case is high-confidence (the file path IS the
+ * route, no fabrication); the React Router JSX case is lower-confidence
+ * (a `<Route>` declaration's containing file isn't always the page
+ * component itself — see FRONTEND_PAGE_PATTERNS' comment).
+ */
+function detectNextPage(filePath: string): { routePath: string } | null {
+  const appPageMatch = filePath.match(/(^|\/)app\/((?:.*\/)?)page\.(tsx|jsx|ts|js|mjs)$/);
+  const pagesMatch = filePath.match(/(^|\/)pages\/(.*)\.(tsx|jsx|ts|js|mjs)$/);
+
+  if (appPageMatch) {
+    const segments = appPageMatch[2].split("/").filter((seg) => seg && !/^\(.*\)$/.test(seg));
+    return { routePath: "/" + segments.join("/") };
+  }
+
+  if (pagesMatch) {
+    const rest = pagesMatch[2];
+    if (rest.startsWith("api/")) return null; // handled as an http-route above, not a page
+    if (/^_(app|document|error)$/.test(rest.split("/").pop() ?? "")) return null; // Next.js framework files, not a real page
+    const segments = rest.split("/").filter((seg) => seg && seg.toLowerCase() !== "index");
+    return { routePath: "/" + segments.join("/") };
+  }
+
+  return null;
+}
+
+/**
+ * `<Route path="...">` (React Router). Content-based, not file-path-based,
+ * so — unlike `detectNextPage` — this can only prove "this file declares a
+ * route for this path," not that the file IS the page's own component
+ * (`element={<X/>}` may point elsewhere). Lower confidence, disclosed as
+ * such in `detectionEvidence`.
+ */
+const FRONTEND_PAGE_PATTERNS: { framework: string; pattern: RegExp }[] = [
+  { framework: "React Router", pattern: /<Route\s+[^>]*?path\s*=\s*["']([^"']+)["']/g },
 ];
 
 const CLI_PATH_PATTERN = /(^|\/)(bin|cli)(\/|$)/i;
@@ -151,6 +193,48 @@ export const entryPointAnalyzer: Analyzer<EntryPointAnalyzerOutput> = {
             nextRoute.methods.length > 0
               ? `Next.js route handler (${nextRoute.methods.join(", ")}) — path from file location, not a call site`
               : "Next.js route handler file — path from file location, not a call site",
+        });
+        seenFiles.add(file.id);
+        continue;
+      }
+
+      // Content-based (React Router's explicit `<Route path="...">`) is
+      // checked BEFORE the file-path convention below: "pages/" as a
+      // directory name is a plain React Router convention too, not
+      // exclusively Next.js, so a file that actually declares a real route
+      // should win on that stronger, explicit signal rather than a guess
+      // from its directory position.
+      let bestPagePath: string | null = null;
+      let bestPageFramework: string | null = null;
+      for (const { framework, pattern } of FRONTEND_PAGE_PATTERNS) {
+        pattern.lastIndex = 0;
+        const match = pattern.exec(content);
+        if (match) {
+          bestPageFramework = framework;
+          bestPagePath = match[1];
+          break;
+        }
+      }
+      if (bestPageFramework && bestPagePath) {
+        entryPoints.push({
+          id: `entry-${counter++}`,
+          type: "frontend-page",
+          name: bestPagePath,
+          fileId: file.id,
+          detectionEvidence: `Matched a ${bestPageFramework} route declaration — path from the <Route> call site, not necessarily this file's own page component`,
+        });
+        seenFiles.add(file.id);
+        continue;
+      }
+
+      const nextPage = detectNextPage(file.path);
+      if (nextPage) {
+        entryPoints.push({
+          id: `entry-${counter++}`,
+          type: "frontend-page",
+          name: nextPage.routePath,
+          fileId: file.id,
+          detectionEvidence: "Next.js page file — path from file location, not a call site",
         });
         seenFiles.add(file.id);
         continue;

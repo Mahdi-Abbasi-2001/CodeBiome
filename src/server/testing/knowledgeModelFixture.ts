@@ -3,6 +3,7 @@ import { runAnalyzers } from "@/server/analyzers/runner";
 import { structureAnalyzer } from "@/server/analyzers/structure-analyzer";
 import { dependencyAnalyzer } from "@/server/analyzers/dependency-analyzer";
 import { entryPointAnalyzer } from "@/server/analyzers/entry-point-analyzer";
+import { frontendCallAnalyzer } from "@/server/analyzers/frontend-call-analyzer";
 import { buildKnowledgeModel } from "@/server/knowledge-model/builder";
 import type { RepositoryKnowledgeModel } from "@/types/knowledge-model";
 import { fakeSnapshot } from "./fixtures";
@@ -24,6 +25,7 @@ export async function buildTestKnowledgeModel(
   registry.register(structureAnalyzer);
   registry.register(dependencyAnalyzer);
   registry.register(entryPointAnalyzer);
+  registry.register(frontendCallAnalyzer);
   const runSummary = await runAnalyzers(snapshot, registry);
 
   return buildKnowledgeModel(snapshot, runSummary);
