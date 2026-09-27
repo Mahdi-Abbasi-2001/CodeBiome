@@ -1,5 +1,7 @@
 # IBM Bob 2.0 Integration
 
+> **Historical record.** This documents CodeBiome's original, IBM-Bob-specific MCP integration, including real validated IBM Bob 2.0 session transcripts. The MCP server now works with any compatible client (Claude Desktop/Code, Cursor, Cline, Windsurf, IBM Bob, or a generic client) — see [`docs/MCP_CLIENTS.md`](./MCP_CLIENTS.md) for current, client-agnostic setup. Tool names/counts and some file paths below (e.g. `bob-tools/`, `bobEventBus`) are as they were at the time and no longer match the current codebase (now `mcp-tools/`, `activityEventBus`, etc.) — kept for historical reference and as real evidence of a validated agent integration.
+
 ## 0. What this document is
 
 This records the investigation into how CodeBiome can actually integrate

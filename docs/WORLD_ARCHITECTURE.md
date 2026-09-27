@@ -1,30 +1,28 @@
-# World Architecture — Bob-First Repository Analysis
+# World Architecture — Agent-First Repository Analysis
 
 This document covers the CodeBiome **World** abstraction: what makes it
-possible for a developer to ask IBM Bob to analyze a repository *without
-ever opening the CodeBiome web app first*, and for the resulting analysis
-to be reliably reachable from any Vercel serverless instance.
+possible for a developer to ask any connected MCP agent to analyze a
+repository *without ever opening the CodeBiome web app first*, for the
+resulting World to be reliably reachable from any Vercel serverless
+instance, and for two different agents/developers hitting the same
+deployment to never collide with each other.
 
-See also: `docs/BOB_INTEGRATION.md` (the MCP tool architecture this builds
-on), `docs/VERCEL_DEPLOYMENT.md` (the deployment/persistence investigation
-this phase's design responds to), `docs/BOB_REMOTE_MCP.md` (connecting Bob
-to a deployed CodeBiome).
+See also: [`docs/MCP_CLIENTS.md`](./MCP_CLIENTS.md) (connecting an agent),
+[`docs/REPOSITORY_KNOWLEDGE_MODEL.md`](./REPOSITORY_KNOWLEDGE_MODEL.md) (the
+schema a World's knowledge model grows into), `docs/VERCEL_DEPLOYMENT.md`
+(the deployment/persistence investigation this design responds to — kept as
+a historical record, some names below have since changed from what it
+describes).
 
 ## 1. The problem this solves
 
-Before this phase, "which repository is CodeBiome currently showing" was
-answered by in-memory, per-process state (`knowledgeModelStore`'s "most
-recently analyzed" pointer). This worked locally (one process) but broke on
-Vercel: a developer's browser call to `/api/analyze` and Bob's later call to
-`/api/mcp` are independent HTTP requests that Vercel does not guarantee
-lands on the same warm instance. Empirically confirmed
-(`docs/VERCEL_DEPLOYMENT.md` §3) to happen often enough to matter, this
-surfaced as Bob's tools intermittently returning *"No repository has been
-analyzed by CodeBiome yet in this session."*
-
-It also meant the ONLY way to start was: open the browser, paste a URL,
-keep that tab/session alive, then switch to Bob. There was no way for Bob
-to be the entry point.
+"Which repository is CodeBiome currently showing" cannot be answered by
+per-process in-memory state: a developer's browser call to `/api/analyze`
+and an agent's later call to `/api/mcp` are independent HTTP requests that
+Vercel does not guarantee land on the same warm instance. A World must be
+readable from ANY instance, and — since any MCP client can now connect, not
+just one developer's single agent session — two different agents hitting the
+same deployed instance must never silently resolve to each other's World.
 
 ## 2. The World abstraction
 
@@ -41,112 +39,109 @@ interface WorldRecord {
 }
 ```
 
-Two parts, split deliberately (mirrors `docs/ARCHITECTURE.md`'s "layer 3 is
-the contract" rule):
+Two parts:
 
 ```
 World
- ├── WorldSnapshot (immutable — never mutated after creation)
- │    ├── knowledgeModel   (the real RKM)
- │    ├── flowModel        (statically inferred flows)
- │    └── worldModel       (the 3D world model)
+ ├── WorldSnapshot (GROWS incrementally — no longer computed once and frozen)
+ │    ├── knowledgeModel   (starts as just a file tree; submit_* tools grow it)
+ │    ├── flowModel        (starts empty; grown by submit_flow)
+ │    └── worldModel       (NOT stored — recomputed from knowledgeModel on every
+ │                          read/write, since it's a pure function of it)
  │
- └── WorldMutableState (mutable — Bob's interpretation + navigation session)
+ └── WorldMutableState (mutable — an agent's interpretation + navigation session)
       ├── sessionContext       (what the developer is looking at right now)
-      ├── domainConcepts[]     (AI-interpreted groupings Bob contributed)
-      └── onboardingJourneys[] (ordered, narrated paths Bob created)
+      ├── domainConcepts[]     (AI-interpreted groupings an agent contributed)
+      ├── onboardingJourneys[] (ordered, narrated paths an agent created)
+      └── featurePlans[]       (proposed feature implementations an agent authored)
 ```
+
+This is a real shift from how Worlds worked before: `knowledgeModel` and
+`flowModel` used to be computed once, deterministically, at analysis time,
+and treated as immutable — the only mutable part was the AI-interpretation
+layer on top. Now the knowledge model itself is something a connected agent
+builds up call by call (`submit_modules`, `submit_dependencies`, ...), so it
+has to be mutable too. `worldStore.updateSnapshot()` is the read-merge-write
+mechanism every `submit_*` tool uses (see
+[`docs/REPOSITORY_KNOWLEDGE_MODEL.md`](./REPOSITORY_KNOWLEDGE_MODEL.md)).
+`worldModel` stops being part of what's stored at all — `server/world/
+builder.ts`'s pure function just runs again against whatever the current
+knowledge model is, every time a submission changes it.
 
 **Analyzing the same repository twice deliberately creates two independent
 Worlds** — different ids, different mutable state, isolated events. A World
-represents one analysis *visit*, not a cache keyed by commit. (The
-underlying `knowledgeModelStore` fetch-avoidance cache, unchanged, still
-means re-analyzing an already-seen commit is fast — it just always gets a
-fresh World identity on top.)
+represents one analysis *visit*.
 
 ## 3. Persistence — Vercel Blob, not a database
 
 `src/server/world/worldStore.ts` is the single source of truth for World
-data. Two implementations, selected automatically:
+data. Three implementations, selected automatically:
 
 - **`BlobWorldStore`** (when `BLOB_READ_WRITE_TOKEN` OR `BLOB_STORE_ID` is
   set — production): plain JSON blobs at deterministic pathnames
   (`worlds/{id}/snapshot.json`, `worlds/{id}/state.json`,
-  `worlds/{id}/events.json`, plus two small index blobs for the owner/repo
-  and "most recent" fallback lookups), written with `access: "private"` and
-  `allowOverwrite: true`, read back with the SDK's `get()` (not a raw
-  `fetch` of the blob URL — a private blob's URL isn't fetchable
-  unauthenticated; `get()` resolves the same OIDC/token credential `put()`
-  used). This store was provisioned as `--access private`
-  (`docs/VERCEL_DEPLOYMENT.md` §4); Vercel rejects `access: "public"` writes
-  against a private store outright — confirmed against the real deployment,
-  not just inferred from docs. A read-through/write-through in-memory `Map`
-  cache sits in front of it purely for same-instance speed — never the
-  source of truth, so a cold/different instance falls through to Blob
-  correctly.
-- **`InMemoryWorldStore`** (neither var set — local `npm run dev`/`npm run
-  start`): the exact same interface, backed by plain `Map`s. Zero required
-  local setup, matching this project's existing philosophy for every prior
-  store.
+  `worlds/{id}/events.json`, plus small index blobs), written with
+  `access: "private"` and `allowOverwrite: true`. A read-through/write-through
+  in-memory `Map` cache sits in front purely for same-instance speed — never
+  the source of truth.
+- **`FileWorldStore`** (local `npm run dev`/`npm run start`, no Blob env
+  vars): same interface, backed by the OS temp directory — a plain in-memory
+  `Map` isn't safe here since Next's dev server doesn't guarantee route
+  handlers share a module instance.
+- **`InMemoryWorldStore`** (under `vitest` only): plain `Map`s, fastest for
+  tests.
 
-This was chosen over Postgres/Redis/Vercel KV because the actual
-requirement is "read/write small-to-medium JSON blobs, correctly, from any
-instance" — Vercel Blob is the smallest primitive that provides that,
-without provisioning a database. See `docs/VERCEL_DEPLOYMENT.md` §6 for why
-this project already ruled out heavier options once before.
+This was chosen over Postgres/Redis/Vercel KV because the actual requirement
+is "read/write small-to-medium JSON documents, correctly, from any
+instance" — Vercel Blob is the smallest primitive that provides that.
 
 **Provisioning** (one-time, via the Vercel CLI or dashboard):
 ```bash
 vercel storage create codebiome-worlds --type blob --access private
 vercel storage connect codebiome-worlds --yes
 ```
-**Important, empirically confirmed during this project's own deployment**:
-the Vercel CLI's current default `storage connect` flow uses OIDC auth — it
-injects `BLOB_STORE_ID` (and `BLOB_WEBHOOK_PUBLIC_KEY`) into the project's
-environment, but deliberately does **not** set `BLOB_READ_WRITE_TOKEN`. The
-actual per-request credential (`VERCEL_OIDC_TOKEN`) is injected by the
-Vercel runtime itself and never appears in `vercel env ls` — the
-`@vercel/blob` SDK resolves it automatically given `BLOB_STORE_ID`. The
-store-selection check above deliberately treats either var as sufficient on
-its own; gating only on `BLOB_READ_WRITE_TOKEN` would silently fall back to
-in-memory storage under this now-default connection method, no code change
-needed either way to pick up whichever one is present.
+The Vercel CLI's current default `storage connect` flow uses OIDC auth — it
+sets `BLOB_STORE_ID` but not `BLOB_READ_WRITE_TOKEN`; the actual per-request
+credential is injected by the Vercel runtime itself. The store-selection
+check treats either var as sufficient on its own.
 
 ## 4. World resolution — how every MCP tool finds "which World"
 
-`src/server/bob-tools/resolveRepository.ts`'s `resolveWorld()` (and the
-`resolveKnowledgeModel`/`resolveFlowModel` wrappers every existing tool
-already called) now try, in order:
+`src/server/mcp-tools/resolveRepository.ts`'s `resolveWorld()` tries, in
+order:
 
-1. **`worldId`** — the robust path. Bob gets this once from
-   `analyze_repository`'s own result and threads it through every
-   subsequent call in the same conversation, exactly the way it already
-   threaded `owner`/`repo` before. This is an ordinary piece of
-   conversation context to an LLM agent — Bob does not need any new MCP
-   protocol feature to "remember" it, and the developer never has to copy
-   or paste an id anywhere.
+1. **`worldId`** — the robust path. An agent gets this once from
+   `analyze_repository`'s own result and threads it through every subsequent
+   call in the same conversation.
 2. **`owner`/`repo`** — backward-compatible convenience: resolves to
    whichever World was most recently created for that repository
    (`worldStore.getLatestWorldIdForRepository`).
-3. **Neither** — resolves to the single most recently created World across
-   the deployment (`worldStore.getMostRecentWorldId`) — the same
-   "developer has one World open" fallback this project always had, now
-   backed by durable storage instead of in-memory-only.
+3. **A per-connection `defaultWorldId`** — derived from THIS MCP
+   connection's own request (its `?worldId=` query param — see
+   `src/server/api-handlers/mcp.ts`), never from shared/global state. A
+   developer's client config points at a specific World's URL; that's the
+   only thing that can supply this default.
+4. **None of the above resolves anything**: throws `MissingWorldIdError`.
 
-Every existing tool (`get_repository_overview`, `get_module`, `list_flows`,
-`start_flow`, `contribute_domain_concept`, `create_onboarding_journey`,
-etc.) kept its exact function body — only the args type widened to accept
-an optional `worldId`, and the resolution underneath is now World-aware.
-**No tool implementation was duplicated.**
+**This replaced a real bug.** The old chain's step 3 was "resolve to the
+single most recently created World across the whole deployment" — fine for
+one developer with one agent, actively wrong the moment CodeBiome started
+supporting multiple concurrent agents/clients: two different developers
+hitting the same deployed instance without an explicit `worldId` would
+silently collide on "whichever World was most recent," each seeing (and
+potentially mutating) the other's analysis. The per-connection default
+closes that hole — a connection only ever defaults to a World if its own
+config told it to.
 
-## 5. `analyze_repository` — the Bob-first entry point
+Every tool's args type accepts an optional `worldId`/`owner`/`repo` — the
+resolution underneath is uniform across all 32 tools.
 
-A new, focused MCP tool (`src/server/bob-tools/analysisTools.ts`):
+## 5. `analyze_repository` — the agent-first entry point
+
+A focused MCP tool (`src/server/mcp-tools/analysisTools.ts`):
 
 ```json
-{
-  "repositoryUrl": "https://github.com/owner/repo"
-}
+{ "repositoryUrl": "https://github.com/owner/repo" }
 ```
 returns:
 ```json
@@ -155,143 +150,115 @@ returns:
   "worldUrl": "https://codebiome.vercel.app/world/5XG-E1DRD5KY",
   "repository": "owner/repo",
   "commitSha": "...",
-  "summary": { "modules": 33, "files": 600, "flows": 1, "entryPoints": 1 },
-  "message": "Repository analyzed successfully. I created a CodeBiome world for this repository: https://codebiome.vercel.app/world/5XG-E1DRD5KY"
+  "fileCount": 600,
+  "topLevelEntries": ["src", "docs", "package.json"],
+  "message": "..."
 }
 ```
-Every number in `summary` is read directly off the real, just-built
-`RepositoryKnowledgeModel`/`FlowModel` — never invented.
 
-**It runs the exact same deterministic pipeline** the browser's manual
-"paste a GitHub URL" flow uses — both call
-`src/server/analysis/runAnalysisPipeline.ts` (extracted from what used to
-be `/api/analyze`'s only body), then both call
-`src/server/world/createWorldFromAnalysis.ts` to create a World from the
-result. **There is exactly one analysis pipeline**; `analyze_repository`
-does not duplicate it, and does not skip any deterministic step to be
-faster.
+**This does NOT run any architecture analysis.** It fetches the repository
+(`buildRepositorySnapshot`) and records its real file tree
+(`seedKnowledgeModel`, src/server/ingestion/) — the same ingestion step the
+browser's manual "paste a GitHub URL" flow uses. Nothing about modules,
+dependencies, or entry points exists yet; the calling agent is expected to
+explore the repository itself and then call the `submit_*` tools. This is
+the core of the architecture rework — see
+[`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) §1-2 for why.
 
 ## 6. World URL — `/world/[worldId]`
 
-`src/app/world/[worldId]/page.tsx` fetches `GET /api/world/{worldId}`
-(`src/app/api/world/[worldId]/route.ts`, its own simple route — it only
-reads `worldStore`, no cross-endpoint in-memory dependency, so it doesn't
-need to share a process with anything) and reconstructs the full CodeBiome
-experience: the 3D world, the Investigation Panel, Flow Explorer, and
-whatever domain concepts/onboarding journeys were already contributed —
+`src/app/world/[worldId]/page.tsx` fetches `GET /api/world/{worldId}` and
+reconstructs the full CodeBiome experience: the five lenses, the
+Investigation Panel, and whatever has been submitted/contributed so far —
 all from the World id alone. **No GitHub URL re-entry required.**
 
-The actual world UI (`src/features/world-experience/WorldExperience.tsx`)
-is unchanged in substance from before this phase — it was extracted
-verbatim from `src/app/page.tsx`'s old inline "world" render phase, just
-parameterized by `worldId` instead of reading `knowledgeModel.meta.repositoryId`.
-**The visual design was not touched.**
+### Browser-first flow
 
-### Browser-first fallback
-
-`src/app/page.tsx` (the root `/` page) still supports pasting a GitHub URL
-manually — it now runs the same pipeline via `/api/analyze`, and on success
-redirects (`router.push`) to `/world/{worldId}` instead of rendering the
-world inline. **Both entry points produce the exact same World
-abstraction** and land on the same URL shape:
+`src/app/page.tsx` (the root `/` page) supports pasting a GitHub URL
+manually. It ingests the repository the same way `analyze_repository` does,
+then hands the freshly created World to CodeBiome's own built-in demo agent
+(`src/server/demo-agent/runDemoAgent.ts`) — an in-process MCP client running
+an LLM tool-use loop against the exact same tools an external agent would
+call — so the "paste a URL and watch it get analyzed" experience still
+exists without requiring a manually-driven external agent. If
+`ANTHROPIC_API_KEY` isn't set, this step is skipped (not a fatal error): the
+World still exists with a real file tree, and a developer can connect their
+own agent to populate it instead.
 
 ```
-Bob-first:     Bob -> analyze_repository -> worldUrl -> browser opens it
-Browser-first: developer -> paste URL -> /api/analyze -> redirect to /world/{id}
+Agent-first:    an agent -> analyze_repository -> worldUrl -> browser opens it
+                            -> agent explores + calls submit_* tools
+Browser-first:  developer -> paste URL -> /api/analyze -> redirect to /world/{id}
+                            -> CodeBiome's own demo agent explores + submits
 ```
 
-## 7. Browser <-> Bob event routing, scoped by World
+Both entry points produce the exact same World abstraction and land on the
+same URL shape; both are populated by an agent calling the exact same
+`submit_*` tools — CodeBiome's own demo agent has no special access.
 
-Every `BobEvent` (`src/types/bob-events.ts`) now carries a `worldId` field,
-not just the pre-existing `repositoryId`. `src/server/bob/eventBus.ts`
-publishes by appending to `worldStore` (durable); `src/server/api-handlers/
-bobEvents.ts`'s SSE handler reads back through
+## 7. Browser <-> agent event routing, scoped by World
+
+Every `AgentEvent` (`src/types/agent-events.ts`) carries a `worldId` field.
+`src/server/agent/eventBus.ts`'s `activityEventBus` publishes by appending to
+`worldStore` (durable); `src/server/api-handlers/agentEvents.ts`'s SSE
+handler (`/api/agent-events`) reads back through
 `worldStore.getEventsSince(worldId, ...)`, filtered to exactly that World —
-**an event from World A is structurally incapable of reaching a World B
-browser tab**, even when both were analyzed from the same repository,
-because they're stored under different `worlds/{id}/events.json` blobs
-entirely.
+an event from World A cannot reach a World B browser tab, even when both
+were analyzed from the same repository.
 
-**Delivery mechanism, deliberately changed**: the old in-memory
-`EventEmitter` push (instant, but only reached a subscriber on the exact
-same warm instance that published the event — the same class of bug as §1)
-was replaced with a short poll (`POLL_INTERVAL_MS = 1500`) against the
-durable event log. This is a correctness-for-latency tradeoff, made
-deliberately: a human watching a demo cannot distinguish instant from
-~1.5s, and a single delivery mechanism that is correct regardless of which
-instance handled which request is worth far more than an instant one that
-silently misses cross-instance events. **Verified working end-to-end**,
-locally, with a real Bob Shell session: a browser tab opened via the
-browser-first flow visibly reacted (Investigation Panel focus, "BOB'S
-ONBOARDING JOURNEY" HUD card) to a separate, real `bob run` process calling
-`create_onboarding_journey` against the same World id.
+Delivery is a short poll (`POLL_INTERVAL_MS = 1500`) against the durable
+event log, not an instant in-memory push — a deliberate correctness-for-
+latency tradeoff: a human watching a demo cannot distinguish instant from
+~1.5s, and a single delivery mechanism correct regardless of which instance
+handled which request is worth more than an instant one that silently misses
+cross-instance events.
 
 ## 8. Local development vs. production
 
 | | Local (`npm run dev`/`start`) | Production (Vercel) |
 |---|---|---|
-| World persistence | `InMemoryWorldStore` (plain `Map`s) | `BlobWorldStore` (Vercel Blob) |
+| World persistence | `FileWorldStore` (OS temp dir) | `BlobWorldStore` (Vercel Blob) |
 | Setup required | None | One-time `vercel storage create` + `connect` |
-| World URL base | `http://localhost:3000` | `https://<production-domain>` (from `VERCEL_PROJECT_PRODUCTION_URL`, or `APP_BASE_URL` override — see `src/server/world/baseUrl.ts`) |
-| Cross-instance correctness | N/A (one process) | Durable — verified via Blob-backed reads from a freshly created serverless instance |
+| World URL base | `http://localhost:3000` | `https://<production-domain>` (`VERCEL_PROJECT_PRODUCTION_URL`, or `APP_BASE_URL` override) |
+| stdio MCP process | `npm run mcp:stdio` shares the same `FileWorldStore` automatically | Not applicable — connect over HTTP instead |
 
-## 9. Example Bob workflow
+## 9. Example agent workflow
 
 ```
-Developer (in Bob IDE):
+Developer (in any connected MCP client):
 "Analyze https://github.com/lujakob/nestjs-realworld-example-app and
  create a guided onboarding journey for the main user workflow."
 
-Bob:
+Agent:
   analyze_repository({ repositoryUrl: "..." })
-    -> { worldId: "abc123", worldUrl: "https://.../world/abc123", summary: {...} }
-  get_repository_overview({ worldId: "abc123" })
-  list_flows({ worldId: "abc123" })
-  get_flow({ worldId: "abc123", flowId: "..." })
-  get_module({ worldId: "abc123", moduleId: "..." })  x N
+    -> { worldId: "abc123", worldUrl: "https://.../world/abc123", fileCount: 340, ... }
+  get_file / search_repository  x N   (explores the real code itself)
+  submit_modules({ worldId: "abc123", modules: [...] })
+  submit_dependencies({ worldId: "abc123", dependencies: [...] })
+  submit_entry_points({ worldId: "abc123", entryPoints: [...] })
+  submit_flow({ worldId: "abc123", name: "...", steps: [...] })
   create_onboarding_journey({ worldId: "abc123", title: "...", steps: [...] })
 
-Bob's answer to the developer:
-"Repository analyzed successfully. I created a CodeBiome world for this
- repository: https://.../world/abc123 — [explanation, citing real facts]"
+Agent's answer to the developer:
+"I analyzed the repository and created a CodeBiome world:
+ https://.../world/abc123 — [explanation, citing what it actually submitted]"
 
-Developer opens the URL -> the 3D world loads, already showing the
-onboarding journey Bob created, no GitHub URL re-entry needed.
-
-Developer, in Bob: "What happens after this?"
-Bob: get_current_context({ worldId: "abc123" }) -> resolves "this" from
-     what the browser last reported -> investigates -> answers, optionally
-     calling advance_onboarding_step to move the walkthrough itself.
+Developer opens the URL -> the world loads, already showing the modules,
+flow, and onboarding journey the agent submitted, updating live if the
+agent submits more.
 ```
 
-## 10. What did NOT change
+## 10. Known limitations
 
-- The deterministic analyzers, RKM schema, FlowModel inference, and World
-  Model builder — untouched.
-- The 3D visual experience — untouched (extracted, not redesigned).
-- The AI-grounding invariant — every domain concept and onboarding journey
-  step still validates every referenced entity against the real RKM before
-  storing anything; Bob still cannot invent a module, file, or dependency
-  edge. This was not weakened anywhere in this phase.
-- The existing manual browser-first workflow — still works, now on the
-  same World abstraction instead of an anonymous inline render.
-
-## 11. Known limitations
-
-- **Read-modify-write on `WorldMutableState`, not a transaction.** Two
-  concurrent tool calls that both mutate a World's session context /
-  domain concepts / onboarding journeys could race (last write wins). Same
-  class of weak-consistency tradeoff this project already accepted for
-  every in-memory store before Worlds existed — now explicitly disclosed
-  rather than papered over.
+- **Read-modify-write on `WorldSnapshot`/`WorldMutableState`, not a
+  transaction.** Two concurrent tool calls that both mutate the same World
+  (e.g. two agents submitting modules at once) could race (last write
+  wins).
 - **No World expiry/cleanup.** Worlds accumulate in Blob storage
-  indefinitely. Fine for a hackathon; a real product would need a TTL or
-  cleanup job.
-- **No authentication.** A World id is opaque but not a security boundary
-  — anyone with the URL (or who guesses a 9-byte random id, which is not
-  practical, but is not *cryptographically* hardened either) can view or
-  act on a World. Proportional to the rest of this application's existing
-  posture (no auth anywhere yet).
+  indefinitely.
+- **Auth is opt-in and all-or-nothing.** `MCP_AUTH_TOKEN`, when set, gates
+  the entire `/api/mcp` endpoint; unset (the local-dev default), a World id
+  is opaque but not a security boundary — anyone with the URL can view or
+  act on a World. See [`docs/MCP_CLIENTS.md`](./MCP_CLIENTS.md).
 - **SSE delivery is polled, not pushed** (§7) — up to ~1.5s latency for a
-  cross-instance event to reach a browser tab. Deliberate, disclosed
-  tradeoff, not a bug.
+  cross-instance event to reach a browser tab.

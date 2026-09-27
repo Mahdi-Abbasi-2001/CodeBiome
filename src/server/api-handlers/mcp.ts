@@ -1,37 +1,43 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { registerBobTools } from "@/server/bob-tools";
+import { registerMcpTools } from "@/server/mcp-tools";
 
 /**
- * CodeBiome's MCP server, per docs/BOB_INTEGRATION.md. IBM Bob is an MCP
- * CLIENT (its own IDE/CLI process) that connects OUT to servers like this
- * one — nothing calls IN to Bob, and CodeBiome never talks to an "IBM Bob
- * API" because no such thing exists for embedding Bob's reasoning into
- * another app. A developer adds this endpoint to their own Bob config
- * (`.bob/mcp.json`, `type: "streamable-http"`) and asks Bob questions in
- * their IDE; Bob decides which tools below to call.
+ * CodeBiome's MCP server. Any spec-compliant MCP client that supports
+ * Streamable HTTP can connect here — Claude Desktop/Code, Cursor, Cline,
+ * Windsurf, IBM Bob, or a generic client — see docs/MCP_CLIENTS.md for
+ * per-client config. A developer adds this endpoint's URL to their own
+ * client's MCP config and asks it questions; the agent decides which tools
+ * below to call.
  *
- * Streamable HTTP (not legacy SSE) — the modern MCP transport, and the one
- * IBM Bob's own docs describe for remote servers. Stateless mode
- * (`sessionIdGenerator: undefined`): a fresh McpServer + transport per HTTP
- * request. This matches how the RKM cache already works (in-memory,
- * per-process — see knowledge-model/store.ts) and is the recommended shape
- * for a server that may run on serverless (Vercel): there is no long-lived
- * connection to keep alive between calls, only the shared in-memory stores
- * (`knowledgeModelStore`, `bobEventBus`, `sessionContextStore`, etc.) that
- * every request handled by THIS SAME function reads and writes — see
- * src/app/api/[...codebiome]/route.ts for why this, `/api/analyze`,
- * `/api/session-context`, and `/api/bob-events` are deliberately one
- * Vercel Function rather than four.
+ * Streamable HTTP (not legacy SSE) — the modern MCP transport. Stateless
+ * mode (`sessionIdGenerator: undefined`): a fresh McpServer + transport per
+ * HTTP request — the recommended shape for a server that may run on
+ * serverless (Vercel), since there is no long-lived connection to keep alive
+ * between calls, only the shared in-memory stores (`activityEventBus`,
+ * `sessionContextStore`, etc.) that every request handled by THIS SAME
+ * function reads and writes — see src/app/api/bridge/[target]/route.ts for
+ * why this, `/api/analyze`, `/api/session-context`, and `/api/agent-events`
+ * are deliberately one Vercel Function rather than four.
+ *
+ * `defaultWorldId` is derived from THIS request's own `?worldId=` query
+ * param — never from shared/global state — so it scopes only to whatever
+ * URL a specific developer's client config points at (docs/
+ * WORLD_ARCHITECTURE.md §4). Two different agents/developers hitting this
+ * same deployed instance without an explicit `worldId` in their own config
+ * resolve independently instead of colliding on each other's World.
  */
-function buildServer(): McpServer {
+function buildServer(defaultWorldId?: string): McpServer {
   const server = new McpServer({ name: "codebiome", version: "1.0.0" });
-  registerBobTools(server);
+  registerMcpTools(server, { defaultWorldId });
   return server;
 }
 
 export async function handleMcp(req: Request): Promise<Response> {
-  const server = buildServer();
+  const url = new URL(req.url);
+  const defaultWorldId = url.searchParams.get("worldId") ?? undefined;
+
+  const server = buildServer(defaultWorldId);
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,

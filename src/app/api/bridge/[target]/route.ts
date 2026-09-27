@@ -2,15 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { handleMcp } from "@/server/api-handlers/mcp";
 import { handleAnalyze } from "@/server/api-handlers/analyze";
 import { handleSessionContext } from "@/server/api-handlers/sessionContext";
-import { handleBobEvents } from "@/server/api-handlers/bobEvents";
+import { handleAgentEvents } from "@/server/api-handlers/agentEvents";
+import { checkMcpAuth } from "@/server/api-handlers/mcpAuth";
 
 /**
  * The single Vercel Function backing `/api/mcp`, `/api/analyze`,
- * `/api/session-context`, and `/api/bob-events` — see
+ * `/api/session-context`, and `/api/agent-events` — see
  * `docs/VERCEL_DEPLOYMENT.md` for the full writeup of WHY these four must
  * be one function (Vercel isolates by file; these four exist only to
  * read/write shared in-memory state with each other — RKM, session
- * context, the Bob event bus). External URLs are unchanged:
+ * context, the agent event bus). External URLs are unchanged:
  * `next.config.mjs` `rewrites()` maps each public path onto
  * `/api/bridge/<target>` internally, and this dynamic segment reads
  * `params.target` to know which logical endpoint was actually requested.
@@ -24,7 +25,7 @@ import { handleBobEvents } from "@/server/api-handlers/bobEvents";
  * the invoked handler's `req.nextUrl.searchParams` — a known fragile corner
  * of Next.js rewrite query-merging). A path segment is core, well-tested
  * Next.js routing instead of that edge case, and the ORIGINAL request's own
- * query string (e.g. `/api/bob-events?worldId=...`) is still forwarded
+ * query string (e.g. `/api/agent-events?worldId=...`) is still forwarded
  * automatically by `rewrites()` regardless — confirmed for both `next
  * start` and the real Vercel deployment.
  *
@@ -45,7 +46,7 @@ import { handleBobEvents } from "@/server/api-handlers/bobEvents";
 export const runtime = "nodejs";
 // Covers /api/analyze's worst case (large-repo analysis). Verify against
 // your current Vercel plan — see docs/ARCHITECTURE_DECISIONS.md §2. Note
-// this also caps how long a single /api/bob-events SSE connection stays
+// this also caps how long a single /api/agent-events SSE connection stays
 // open before the browser's EventSource must reconnect (see bobEvents.ts).
 export const maxDuration = 60;
 
@@ -61,23 +62,23 @@ type RouteParams = { params: { target: string } };
 
 export async function GET(req: NextRequest, { params }: RouteParams): Promise<Response> {
   const { target } = params;
-  if (target === "mcp") return handleMcp(req);
-  if (target === "bob-events") return handleBobEvents(req);
+  if (target === "mcp") return checkMcpAuth(req) ?? handleMcp(req);
+  if (target === "agent-events") return handleAgentEvents(req);
   if (target === "analyze" || target === "session-context") return methodNotAllowed();
   return notFound();
 }
 
 export async function POST(req: NextRequest, { params }: RouteParams): Promise<Response> {
   const { target } = params;
-  if (target === "mcp") return handleMcp(req);
+  if (target === "mcp") return checkMcpAuth(req) ?? handleMcp(req);
   if (target === "analyze") return handleAnalyze(req);
   if (target === "session-context") return handleSessionContext(req);
-  if (target === "bob-events") return methodNotAllowed();
+  if (target === "agent-events") return methodNotAllowed();
   return notFound();
 }
 
 export async function DELETE(req: NextRequest, { params }: RouteParams): Promise<Response> {
   const { target } = params;
-  if (target === "mcp") return handleMcp(req);
+  if (target === "mcp") return checkMcpAuth(req) ?? handleMcp(req);
   return notFound();
 }

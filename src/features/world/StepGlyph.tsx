@@ -2,7 +2,7 @@
 
 /**
  * Shared step-pipeline shape vocabulary — used by FlowDiagram (Flow/Journey,
- * both statically reconstructed) and PlanDiagram (Bob's proposed feature
+ * both statically reconstructed) and PlanDiagram (the agent's proposed feature
  * plan, ai-interpreted). One shape language across all three so a "service"
  * always reads as a hexagon and a "database" always reads as a cylinder,
  * whether the step is real or proposed.

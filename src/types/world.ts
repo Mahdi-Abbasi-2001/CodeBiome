@@ -32,7 +32,7 @@ export interface WorldSnapshot {
 
 /**
  * What the browser reports about "what the developer is currently looking
- * at" for one World — see src/server/bob/sessionContext.ts. Previously
+ * at" for one World — see src/server/agent/sessionContext.ts. Previously
  * keyed by repositoryId (a bare Map); now a field inside a World's mutable
  * state, keyed by worldId, so two Worlds for the same repository never see
  * each other's navigation state.
@@ -55,13 +55,13 @@ export interface WorldSessionContext {
  * The AI-interpretation / navigation-session layer for one World — mutable,
  * additive, and persisted separately from the immutable WorldSnapshot (see
  * ARCHITECTURE.md "layer 3 is the contract": the deterministic snapshot
- * must never be mutated in place by anything Bob contributes).
+ * must never be mutated in place by anything the agent contributes).
  */
 export interface WorldMutableState {
   sessionContext: WorldSessionContext | null;
   domainConcepts: DomainConcept[];
   onboardingJourneys: OnboardingJourney[];
-  /** Bob-proposed feature implementation plans — see src/types/featurePlan.ts and the "Plan" tab. */
+  /** the agent-proposed feature implementation plans — see src/types/featurePlan.ts and the "Plan" tab. */
   featurePlans: FeaturePlan[];
 }
 

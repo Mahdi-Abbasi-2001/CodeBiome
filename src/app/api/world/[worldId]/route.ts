@@ -5,7 +5,7 @@ import { worldStore } from "@/server/world/worldStore";
  * Reads a World back for the browser (docs/WORLD_ARCHITECTURE.md) — used by
  * `/world/[worldId]` on mount so opening a World's URL reconstructs the
  * whole CodeBiome experience (RKM, FlowModel, WorldModel, and whatever
- * domain concepts/onboarding journeys/session context Bob or an earlier
+ * domain concepts/onboarding journeys/session context the agent or an earlier
  * visit already contributed) without the developer re-entering the GitHub
  * URL.
  *

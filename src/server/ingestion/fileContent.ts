@@ -1,4 +1,4 @@
-// Shared by /api/file (Investigation Panel's Code tab) and the Bob-facing
+// Shared by /api/file (Investigation Panel's Code tab) and the agent-facing
 // `get_file` MCP tool (src/server/bob-tools/repositoryTools.ts) — one real
 // GitHub fetch path, not two. See /api/file/route.ts for why this fetches
 // on demand instead of shipping every file's source in the analyze payload.

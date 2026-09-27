@@ -1,5 +1,7 @@
 # Analyzer Architecture
 
+> **Historical record.** The analyzer pipeline this document describes (13 regex-based analyzers building the Repository Knowledge Model) was removed. CodeBiome no longer analyzes repositories itself — a connected MCP agent explores the code and submits findings via the `submit_*` tools (see [`docs/REPOSITORY_KNOWLEDGE_MODEL.md`](./REPOSITORY_KNOWLEDGE_MODEL.md) and [`docs/MCP_CLIENTS.md`](./MCP_CLIENTS.md)). Kept for historical reference only.
+
 Defines how deterministic repository facts (layer 1) are produced, so new
 analyzers can be added independently without touching the pipeline runner,
 the Knowledge Model builder, or each other. This is the concrete design

@@ -1,20 +1,56 @@
 # Repository Knowledge Model (RKM)
 
 The RKM is the single canonical, structured representation of a repository
-that every downstream consumer (World Generator, Guided Journey, Missions,
-Bob chat, investigation panels) reads from. It is **layer 3** of the
-architecture described in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+that every downstream consumer (the five lenses, Domain View, every MCP
+tool) reads from. It is **layer 3** of the architecture described in
+[`ARCHITECTURE.md`](./ARCHITECTURE.md). The schema itself is unchanged from
+this project's original design — what changed is how it gets populated.
 
 Two hard rules shape this schema:
 
-1. **Provenance is explicit.** Every fact that isn't 100% deterministic
-   carries a `source` and, where relevant, a `confidence`. Nothing pretends
-   to be a fact when it's actually an interpretation.
-2. **AI never fabricates entities.** Bob's output (the `InterpretedLayer`) can
-   only *annotate* or *reference* IDs that already exist in the deterministic
-   part of the model. It cannot introduce a file, module, or dependency edge
-   that the analyzers didn't find. This is enforced by Zod validation at
-   write time, not just convention.
+1. **Provenance is explicit.** A field's `Provenance` is either
+   `"deterministic"` (directly observed — a file's path, size) or
+   `"ai-interpreted"` (an agent's judgment call — `confidence` and
+   `generatedBy` always accompany it). Nothing pretends to be a fact when
+   it's actually an interpretation.
+2. **An agent never fabricates entities.** Every `submit_*` MCP tool call
+   (`src/server/mcp-tools/submissionTools.ts`) validates every file/module
+   reference against the real, ingested file tree BEFORE anything is
+   merged into the model — an unresolvable reference rejects the whole
+   call. This is enforced by code at write time (see
+   `src/server/mcp-tools/submissionHelpers.ts`'s `requireFile`/
+   `requireModule`), not just convention.
+
+## 0. How this model actually gets built
+
+Unlike the RKM's original design (a deterministic analyzer pipeline
+computing every field in one pass), the model now starts almost empty and
+grows incrementally:
+
+1. **Ingestion** (`src/server/ingestion/seedKnowledgeModel.ts`) seeds
+   `files[]` directly from the real file tree — path, size, a light
+   structural type guess (source/test/config/documentation/asset by
+   extension and directory convention), and line count. `repository.
+   languages` (byte-weighted) and two free deterministic signals
+   (`codeHealth.largeFiles`, `documentation.readme.exists`) are computed
+   here too, since they need no judgment call. Everything else starts empty:
+   `modules`, `dependencies`, `entryPoints`, `repository.frameworks`,
+   `security`, the rest of `codeHealth`/`tests`/`documentation`, and `git`.
+2. **A connected MCP agent** (any client — see
+   [`docs/MCP_CLIENTS.md`](./MCP_CLIENTS.md)) explores the real code with
+   its own tools, then calls `submit_modules`, `submit_dependencies`,
+   `submit_entry_points`, `submit_frameworks`, `submit_security_findings`,
+   `submit_code_health`, `submit_flow`, and `submit_request_journey` —
+   each one merges into the model, validated first.
+3. **`ModuleFact.dependencyIds`/`dependentIds`/`centrality`** are the one
+   set of fields no tool accepts directly — they're recomputed
+   automatically from `dependencies[]` every time `submit_modules` or
+   `submit_dependencies` runs (`recomputeModuleGraph` in
+   `submissionHelpers.ts`), so they can never drift out of sync with the
+   edges that actually exist.
+4. **`WorldModel`** (§15) is not stored at all — it's a pure function of
+   whatever the current `RepositoryKnowledgeModel` is, recomputed on every
+   read.
 
 ## 1. Top-level shape
 
@@ -26,35 +62,40 @@ interface RepositoryKnowledgeModel {
   modules: ModuleFact[];
   dependencies: DependencyEdge[];
   entryPoints: EntryPoint[];
-  dataFlows: DataFlow[];
+  dataFlows: DataFlow[];        // reserved, always empty — see §7
   git: GitIntelligence;
   codeHealth: CodeHealthReport;
   security: SecurityReport;
   tests: TestIntelligence;
   documentation: DocumentationReport;
 
-  /** AI-derived. Absent until Bob has run. Never merged into the fields above. */
+  /** AI-derived. Empty until an agent calls contribute_domain_concept. Never merged into the fields above. */
   domainConcepts: DomainConcept[];
 }
 
 interface ModelMeta {
-  schemaVersion: string;           // semver of this schema
+  schemaVersion: string;
   repositoryId: string;
   commitSha: string;
-  generatedAt: string;             // ISO timestamp
-  analyzerVersions: Record<string, string>; // analyzerId -> version, for cache invalidation/debugging
+  generatedAt: string;
+  analyzerVersions: Record<string, string>;  // empty now that there are no analyzers — kept for schema stability
 }
 
 /** Attached to any fact that isn't purely deterministic. */
 type Provenance =
   | { source: "deterministic" }
-  | { source: "ai-interpreted"; confidence: number; generatedBy: "bob"; modelVersion: string };
+  | { source: "ai-interpreted"; confidence: number; generatedBy: string; modelVersion: string };
 ```
 
-The `InterpretedLayer` (Bob's narrative output: explanations, journey,
-missions) is modeled as a **separate top-level artifact**, not a field mixed
-into `RepositoryKnowledgeModel` — see §9. This keeps "facts" and
-"interpretation" physically separate, not just tagged.
+`generatedBy` is a free-text agent/client name (e.g. `"claude-code"`,
+`"cursor"`, `"codebiome-demo-agent"`) — never a hardcoded single agent, since
+any MCP client can submit.
+
+Onboarding journeys and feature plans are modeled as **separate top-level
+types** (`OnboardingJourney` in `src/types/onboarding.ts`, `FeaturePlan` in
+`src/types/featurePlan.ts`), not fields mixed into
+`RepositoryKnowledgeModel` — see §14. This keeps "facts" and "agent
+narrative" physically separate, not just tagged.
 
 ## 2. Repository
 
@@ -66,8 +107,8 @@ interface RepositoryInfo {
   url: string;
   defaultBranch: string;
   description: string | null;
-  languages: LanguageStat[];       // from linguist-style byte-count analysis
-  frameworks: FrameworkDetection[]; // e.g. Next.js, Express, Django — evidence-based
+  languages: LanguageStat[];        // computed at ingestion, byte-weighted by extension
+  frameworks: FrameworkDetection[]; // empty until an agent calls submit_frameworks
   statistics: RepositoryStatistics;
 }
 
@@ -79,16 +120,16 @@ interface LanguageStat {
 
 interface FrameworkDetection {
   name: string;
-  category: "frontend" | "backend" | "fullstack" | "mobile" | "infra" | "testing" | "other";
-  evidence: string[];              // e.g. ["package.json:dependencies.next", "next.config.js present"]
-  confidence: number;               // 0..1, deterministic scoring (not AI)
+  category: "frontend" | "backend" | "fullstack" | "mobile" | "infra" | "testing" | "other" | "database" | "cache" | "queue" | "search" | "external-api";
+  evidence: string[];    // real file ids/paths the submitting agent cited — validated
+  confidence: number;    // the agent's own confidence, 0..1
 }
 
 interface RepositoryStatistics {
-  fileCount: number;
-  totalLinesOfCode: number;
-  moduleCount: number;
-  contributorCount: number;
+  fileCount: number;         // set at ingestion
+  totalLinesOfCode: number;  // set at ingestion
+  moduleCount: number;       // kept in sync by submit_modules
+  contributorCount: number;  // kept in sync by submit_code_health's git-contributor field
   firstCommitAt: string | null;
   lastCommitAt: string | null;
 }
@@ -102,30 +143,29 @@ type FileType =
   | "asset" | "generated" | "build-output" | "other";
 
 interface FileFact {
-  id: string;                      // stable id, e.g. hash of path
-  path: string;                    // repo-relative
-  type: FileType;
-  language: string | null;
+  id: string;               // = path, by convention
+  path: string;
+  type: FileType;            // guessed at ingestion from path/extension conventions — a thin, uncontroversial heuristic, not the deep analysis this project used to attempt
+  language: string | null;   // by extension, at ingestion
   sizeBytes: number;
   linesOfCode: number;
 
-  /** 0..1, deterministic score from centrality + change frequency + fan-in. */
-  importance: number;
+  importance: number;        // always 0 — no tool currently sets a per-file importance; module-level importance (submit_modules) is what the lenses use
 
-  complexity: ComplexityMetrics | null; // null when not applicable (e.g. assets)
+  complexity: ComplexityMetrics | null;  // always null — no tool currently accepts per-file complexity metrics
 
   testStatus: {
-    isTestFile: boolean;
-    coveredByTests: boolean;        // referenced by at least one test file
+    isTestFile: boolean;      // guessed at ingestion from path convention
+    coveredByTests: boolean;  // always false unless set via submit_code_health's testFiles
     testFileIds: string[];
   };
 
   documentationStatus: {
-    hasFileLevelDoc: boolean;       // header comment/docstring present
-    docCommentCoverage: number;     // 0..1, exported symbols with doc comments
+    hasFileLevelDoc: boolean;    // always false — not currently agent-submittable
+    docCommentCoverage: number;  // always 0 — not currently agent-submittable
   };
 
-  riskIndicators: RiskIndicator[];
+  riskIndicators: RiskIndicator[];  // empty until an agent submits security findings/code health that reference this file
 }
 
 interface ComplexityMetrics {
@@ -141,31 +181,31 @@ interface RiskIndicator {
     | "vulnerable-dependency" | "hardcoded-secret-pattern";
   severity: "low" | "medium" | "high";
   detail: string;
-  evidence: string;                // e.g. matched line, rule id, advisory id
+  evidence: string;
 }
 ```
 
 ## 4. Modules
 
-A "module" is a directory or logical grouping (deterministically derived from
-directory structure + import clustering — not an AI guess about "domains";
-see §11 for the AI-named version).
+A module is whatever boundary a connected agent decided to submit via
+`submit_modules` — typically a directory or logical grouping the agent
+identified while exploring the code. Not derived by CodeBiome itself.
 
 ```typescript
 interface ModuleFact {
-  id: string;
-  name: string;                    // derived from path, e.g. "src/server/auth"
+  id: string;                // agent-supplied, defaults to `path` if omitted
+  name: string;
   path: string;
-  description: string | null;      // deterministic only: e.g. pulled from an existing README/index doc comment, never AI-authored here
-  fileIds: string[];
+  description: string | null;
+  fileIds: string[];         // validated against the real file tree
 
-  importance: number;              // 0..1
-  centrality: number;              // graph centrality within the dependency graph
-  complexity: ComplexityMetrics;   // aggregated from member files
-  risk: RiskIndicator[];
+  importance: number;        // the submitting agent's own judgment, 0..1
+  centrality: number;        // RECOMPUTED automatically from dependencies[] — never agent-submitted directly
+  complexity: ComplexityMetrics;  // linesOfCode summed from real constituent files; cyclomaticComplexity always 0 (not currently agent-submittable)
+  risk: RiskIndicator[];     // optional, agent-submitted alongside the module
 
-  dependencyIds: string[];          // DependencyEdge ids where this module is source
-  dependentIds: string[];           // DependencyEdge ids where this module is target
+  dependencyIds: string[];   // RECOMPUTED from dependencies[]
+  dependentIds: string[];    // RECOMPUTED from dependencies[]
 }
 ```
 
@@ -173,22 +213,18 @@ interface ModuleFact {
 
 ```typescript
 type DependencyRelationshipType =
-  | "imports"            // static import/require
-  | "calls"              // function/API call detected via static analysis
-  | "extends"            // inheritance
-  | "http-request"       // detected fetch/axios/http call to another module's route
-  | "reads-writes-db"    // detected ORM/query usage
-  | "package-dependency"; // external package manifest dependency
+  | "imports" | "calls" | "extends" | "http-request"
+  | "navigates-to" | "reads-writes-db" | "package-dependency";
 
 interface DependencyEdge {
-  id: string;
-  fromId: string;                   // FileFact.id or ModuleFact.id
-  toId: string;                     // FileFact.id, ModuleFact.id, or ExternalPackage id
+  id: string;                // generated
+  fromId: string;            // a real FileFact.id or ModuleFact.id — validated
+  toId: string;              // a real FileFact.id/ModuleFact.id, or any string for toKind "external-package" (not validated — package names aren't in the file tree)
   fromKind: "file" | "module";
   toKind: "file" | "module" | "external-package";
   relationship: DependencyRelationshipType;
-  direction: "uses" | "used-by";     // redundant with from/to but explicit for graph rendering
-  confidence: number;                // 1.0 for static imports, lower for heuristic call-detection
+  direction: "uses" | "used-by";  // always "uses" — the submitting agent's own perspective, canonicalized
+  confidence: number;              // the submitting agent's own confidence, 0..1
 }
 ```
 
@@ -196,14 +232,14 @@ interface DependencyEdge {
 
 ```typescript
 type EntryPointType =
-  | "http-route" | "cli-command" | "app-startup" | "worker" | "script" | "scheduled-job";
+  | "http-route" | "cli-command" | "app-startup" | "worker" | "script" | "scheduled-job" | "frontend-page";
 
 interface EntryPoint {
   id: string;
   type: EntryPointType;
-  name: string;                     // e.g. "POST /api/users", "bin/migrate"
-  fileId: string;
-  detectionEvidence: string;        // e.g. "Next.js app/api/users/route.ts export POST"
+  name: string;
+  fileId: string;              // validated
+  detectionEvidence: string;   // the submitting agent's own justification
 }
 ```
 
@@ -212,196 +248,164 @@ interface EntryPoint {
 ```typescript
 interface DataFlow {
   id: string;
-  label: string;                    // e.g. "Create user"
-  /** Ordered chain of entities the request/data passes through. */
+  label: string;
   steps: DataFlowStep[];
-  entryPointId: string | null;      // originating entry point, if applicable
-  confidence: number;                // static tracing is heuristic beyond 1-2 hops
+  entryPointId: string | null;
+  confidence: number;
 }
 
 interface DataFlowStep {
   order: number;
-  entityId: string;                 // FileFact.id or ModuleFact.id
+  entityId: string;
   entityKind: "file" | "module";
   role: "route" | "controller" | "service" | "repository" | "database" | "external-api" | "component" | "other";
 }
 ```
 
+Reserved for a possible future lower-level deterministic trace concept —
+always empty today. What actually carries request-flow information is the
+separate `Flow`/`Journey` types (§14), submitted via `submit_flow`/
+`submit_request_journey`.
+
 ## 8. Git intelligence
 
 ```typescript
 interface GitIntelligence {
-  commitFrequency: {
-    period: "day" | "week" | "month";
-    series: { date: string; commitCount: number }[];
-  };
-  recentChanges: {
-    fileId: string;
-    lastModifiedAt: string;
-    lastCommitSha: string;
-  }[];
-  hotspots: {
-    fileId: string;
-    changeCount: number;             // commits touching this file, given window
-    coChangedWith: string[];         // fileIds frequently changed together (evidence for coupling)
-  }[];
-  contributors: {
-    name: string;
-    email: string;
-    commitCount: number;
-    firstCommitAt: string;
-    lastCommitAt: string;
-  }[];
+  commitFrequency: { period: "day" | "week" | "month"; series: { date: string; commitCount: number }[] };
+  recentChanges: { fileId: string; lastModifiedAt: string; lastCommitSha: string }[];
+  hotspots: { fileId: string; changeCount: number; coChangedWith: string[] }[];
+  contributors: { name: string; email: string; commitCount: number; firstCommitAt: string; lastCommitAt: string }[];
 }
 ```
+
+Populated only if a connected agent has access to git history and reports
+it via `submit_code_health`'s `gitHotspots`/`gitContributors` fields —
+CodeBiome itself has no git history access (ingestion is a tarball
+download, not a clone). This is what used to be a permanently empty stub
+under the old analyzer pipeline; an agent can genuinely fill it now.
 
 ## 9. Code health
 
 ```typescript
 interface CodeHealthReport {
-  largeFiles: { fileId: string; linesOfCode: number }[];
+  largeFiles: { fileId: string; linesOfCode: number }[];  // computed at ingestion (>300 LOC), free
   todoFixme: { fileId: string; line: number; text: string; kind: "TODO" | "FIXME" }[];
-  deadCodeCandidates: { fileId: string; exportName: string; reason: string }[]; // e.g. "no incoming references found"
-  duplicatedCodeCandidates: {
-    fileIds: string[];
-    similarity: number;              // 0..1, from a similarity-hash algorithm
-    lineRanges: { fileId: string; start: number; end: number }[];
-  }[];
+  deadCodeCandidates: { fileId: string; exportName: string; reason: string }[];
+  duplicatedCodeCandidates: { fileIds: string[]; similarity: number; lineRanges: { fileId: string; start: number; end: number }[] }[];
   missingTests: { moduleId: string; reason: string }[];
   deprecatedPatterns: { fileId: string; pattern: string; evidence: string }[];
 }
 ```
 
-## 10. Security indicators
+Everything but `largeFiles` was a permanently empty stub under the old
+analyzer pipeline (it was never actually computed). All of it is now
+genuinely fillable via `submit_code_health`, since it only requires an
+agent's judgment, not a bespoke analyzer.
 
-Evidence-based only — **Bob cannot add to this list**; it may only narrate
-entries already here.
+## 10. Security indicators
 
 ```typescript
 interface SecurityReport {
-  vulnerableDependencies: {
-    packageName: string;
-    installedVersion: string;
-    advisoryId: string;              // e.g. GHSA/OSV id
-    severity: "low" | "moderate" | "high" | "critical";
-    source: "osv" | "npm-audit" | "github-advisory";
-  }[];
-  patternMatches: {
-    fileId: string;
-    line: number;
-    rule: string;                    // e.g. "hardcoded-aws-key", "eval-usage"
-    severity: "low" | "moderate" | "high" | "critical";
-  }[];
+  vulnerableDependencies: { packageName: string; installedVersion: string; advisoryId: string; severity: "low" | "moderate" | "high" | "critical"; source: "osv" | "npm-audit" | "github-advisory" }[];
+  patternMatches: { fileId: string; line: number; rule: string; severity: "low" | "moderate" | "high" | "critical" }[];
 }
 ```
+
+Populated via `submit_security_findings` — `patternMatches`' `fileId` is
+validated; `vulnerableDependencies` entries are not (package names aren't
+part of the file tree).
 
 ## 11. Tests
 
 ```typescript
 interface TestIntelligence {
   testFiles: { fileId: string; framework: string | null; testedModuleIds: string[] }[];
-  coverage: {
-    available: boolean;               // true only if a coverage report was found/parseable
-    overallPercentage: number | null;
-    byModule: { moduleId: string; percentage: number }[];
-  };
+  coverage: { available: boolean; overallPercentage: number | null; byModule: { moduleId: string; percentage: number }[] };
   missingTestCandidates: { moduleId: string; importance: number; reason: string }[];
 }
 ```
+
+`coverage` should only be set (via `submit_code_health`) if the submitting
+agent found a real coverage report — never estimated.
 
 ## 12. Documentation
 
 ```typescript
 interface DocumentationReport {
-  readme: { exists: boolean; fileId: string | null; sections: string[] };
+  readme: { exists: boolean; fileId: string | null; sections: string[] };  // exists/fileId set at ingestion; sections not currently agent-submittable
   docsDirectory: { exists: boolean; fileIds: string[] };
-  apiDocumentation: { exists: boolean; toolDetected: string | null; fileIds: string[] }; // e.g. OpenAPI spec, TypeDoc
+  apiDocumentation: { exists: boolean; toolDetected: string | null; fileIds: string[] };
   undocumentedImportantModules: { moduleId: string; importance: number }[];
 }
 ```
 
 ## 13. Domain concepts (AI-derived)
 
-This is the one place in the "facts" model where AI output lives, and it is
-kept structurally isolated and explicitly tagged so nothing downstream can
-mistake it for a deterministic fact.
+The one place in the "facts" model where agent interpretation lives inline,
+kept structurally isolated and explicitly tagged.
 
 ```typescript
 interface DomainConcept {
   id: string;
-  name: string;                      // e.g. "Billing", "Authentication"
+  name: string;
   description: string;
-  relatedModuleIds: string[];         // must reference real ModuleFact ids — validated
-  relatedFileIds: string[];           // must reference real FileFact ids — validated
+  relatedModuleIds: string[];  // validated
+  relatedFileIds: string[];    // validated
   provenance: Extract<Provenance, { source: "ai-interpreted" }>;
 }
 ```
 
-Validation rule (enforced in `knowledge-model/validation.ts`): any
-`relatedModuleIds`/`relatedFileIds` not found in `modules`/`files` is rejected
-before persistence — Bob cannot reference an entity that doesn't exist.
+Submitted via `contribute_domain_concept` — this tool, along with
+`create_onboarding_journey` and `propose_feature_plan`, was the original
+template every `submit_*` tool's "validate every reference before storing"
+pattern generalizes from.
 
-## 14. The Interpreted Layer (Bob's output, kept separate)
+## 14. Onboarding journeys and feature plans (kept as separate top-level types)
+
+Unlike the speculative `InterpretedLayer` sketch from this project's
+original design (explanations/journey/missions, never actually built), the
+real implementation is two independently-typed, independently-stored
+artifacts:
 
 ```typescript
-interface InterpretedLayer {
-  meta: {
-    repositoryKnowledgeModelId: string;
-    generatedAt: string;
-    bobModelVersion: string;
-  };
-  explanations: EntityExplanation[];
-  journey: OnboardingJourney;
-  missions: Mission[];
-}
-
-interface EntityExplanation {
-  entityId: string;                  // must reference a real RKM entity
-  entityKind: "file" | "module" | "dataFlow" | "dependency";
-  summary: string;
-  detail: string;
-  citedFactIds: string[];             // RKM entity/fact ids this explanation is grounded in
-}
-
+// src/types/onboarding.ts — submitted via create_onboarding_journey
 interface OnboardingJourney {
   id: string;
   title: string;
-  steps: JourneyStep[];
-}
-
-interface JourneyStep {
-  order: number;
-  title: string;
-  narrative: string;
-  focusEntityIds: string[];           // must reference real RKM entities — drives world camera
   goal: string;
+  steps: { order: number; moduleId: string; moduleName: string; reason: string }[];  // moduleId validated
+  provenance: { source: "ai-interpreted"; confidence: number; generatedBy: string; modelVersion: string };
+  createdAt: string;
 }
 
-interface Mission {
+// src/types/featurePlan.ts — submitted via propose_feature_plan
+interface FeaturePlan {
   id: string;
-  title: string;
-  description: string;
-  difficulty: "intro" | "easy" | "medium" | "advanced";
-  relatedEntityIds: string[];
-  objective: MissionObjective;
+  description: string;   // the developer's own request, echoed back
+  name: string;
+  summary: string;
+  confidence: "high" | "medium" | "low";
+  steps: { id: string; kind: FeaturePlanStepKind; label: string; status: "new" | "existing"; filePath: string; explanation: string }[];
+  impactedEntities: { kind: "domain" | "infra"; id: string; name: string; reason: string }[];
+  newFiles: { suggestedPath: string; purpose: string }[];
+  modifiedFiles: { filePath: string; reason: string }[];  // validated — an unresolvable reference is dropped, not the whole call rejected
+  evidence: string[];    // discloses anything downgraded/dropped during validation
+  generatedAt: string;
 }
-
-/** Objectives are deterministically checkable — completion is verified
- *  against RKM facts, not by asking the AI whether it thinks you're done. */
-type MissionObjective =
-  | { type: "visit-entity"; entityId: string }
-  | { type: "trace-data-flow"; dataFlowId: string }
-  | { type: "identify-dependency"; fromId: string; toId: string }
-  | { type: "find-risk-indicator"; fileId: string; kind: RiskIndicator["kind"] };
 ```
 
-Every ID field in `InterpretedLayer` is Zod-validated against the
-`RepositoryKnowledgeModel` it was generated from at write time.
+`propose_feature_plan` is the one write-back tool that downgrades/drops
+individual unresolvable references (disclosed in `evidence`) rather than
+rejecting the whole call — a deliberate exception, since a feature plan is
+inherently speculative (some of it describes files that don't exist yet).
+Every other `submit_*`/write-back tool rejects the entire call on the first
+bad reference.
 
-## 15. World entities (layer 4 — pure mapping from RKM + InterpretedLayer)
+## 15. World entities (layer 4 — pure mapping from the RKM)
 
-The world is a rendering of the RKM; this mapping is a **deterministic
-function**, not a further AI step.
+The World is a rendering of the RKM; this mapping is a **deterministic
+function** (`src/server/world/builder.ts`), recomputed on every read — not a
+further agent step.
 
 ```typescript
 type WorldEntityType =
@@ -416,54 +420,32 @@ interface WorldModel {
   paths: WorldPath[];
 }
 
-interface WorldEntity {
-  id: string;
-  type: WorldEntityType;
-  sourceEntityId: string;            // traceability back to the RKM fact this represents
-  sourceEntityKind: "repository" | "module" | "file" | "dependency" | "entryPoint" | "test" | "documentation" | "codeHealth" | "security";
-  visualState: VisualState;          // derived deterministically from health/risk fields
-}
-
 interface VisualState {
   healthTier: "thriving" | "healthy" | "stressed" | "critical";
   environmentTags: ("fog" | "toxic" | "dramatic-lighting" | "sunlight" | "footprints" | "warning-indicators")[];
-  scale: number;                     // derived from importance/centrality
+  scale: number;
 }
-
-interface WorldBiome extends WorldEntity { type: "biome"; name: string; }       // repository as a whole
-interface WorldRegion extends WorldEntity { type: "region"; name: string; }    // directory/domain
-interface WorldLandmark extends WorldEntity { }                                 // module/entry point/db/API/tests/docs
-interface WorldPath extends WorldEntity { type: "path"; fromLandmarkId: string; toLandmarkId: string; } // dependency/data flow
 ```
 
-### Deterministic mapping table (repository fact → world entity)
+### Deterministic mapping table (RKM fact → world entity)
 
 | RKM fact | World entity | `type` |
 |---|---|---|
 | `RepositoryInfo` | The world itself | `biome` |
-| `ModuleFact` (top-level directory/domain) | Region | `region` |
-| `ModuleFact` (high importance/centrality) | Landmark | `landmark` |
-| `FileFact` | Tree/object | `object` |
-| `DependencyEdge` | Path between landmarks | `path` |
-| `EntryPoint` (http-route, app-startup) | Gate | `gate` |
-| Data-flow step with `role: "database"` | Cave | `cave` |
-| Data-flow step with `role: "external-api"` | Portal | `portal` |
-| Entry point `type: "scheduled-job"`/CI config files | Factory | `factory` |
-| `DocumentationReport` items | Library | `library` |
-| `TestIntelligence` test files/modules | Training ground | `training-ground` |
-| `CodeHealthReport` risk clusters (dead code, duplication) | Ruins | `ruins` |
-| `GitIntelligence.recentChanges` | Footprints/traveled paths (environment tag) | tag on region/path |
-| `CodeHealthReport`/low health tier | Dead trees, fog (environment tags) | tag on region/object |
-| `SecurityReport` entries | Toxic/hazard tags | tag on object/landmark |
-| High `centrality` module | Enormous central tree | `landmark` (scale-boosted) |
+| `ModuleFact` | Region | `region` |
+| `ModuleFact` (mostly test files, or path matches a tests convention) | Landmark | `training-ground` |
+| `ModuleFact` (mostly documentation files, or path matches a docs convention) | Landmark | `library` |
+| `ModuleFact` (path matches a db/model convention) | Landmark | `cave` |
+| `ModuleFact` with a `dead-code-candidate`/`deprecated-pattern` risk indicator | Landmark | `ruins` |
+| `ModuleFact` (importance ≥ 0.6) | Landmark | `landmark` |
+| A conventional entry filename (`index`/`main`/`server`/`app`) | Landmark | `gate` |
+| `DependencyEdge` (file-to-file, aggregated to module level) | Path between regions | `path` |
 
-`VisualState.healthTier` and `environmentTags` are computed by a pure
-function of `riskIndicators`, `complexity`, `security`, and `git` fields —
-never by asking Bob "does this look healthy."
+`VisualState.healthTier`/`environmentTags`/`scale` are computed by a pure
+function of `importance` and whether the module has any `risk` entries —
+never by asking an agent "does this look healthy."
 
 ## 16. Schema evolution
 
-`meta.schemaVersion` (RKM) and equivalent on `InterpretedLayer`/`WorldModel`
-follow semver. Additive fields bump minor; anything that changes meaning of
-an existing field bumps major and requires a re-analysis migration path
-(cached models below the current major are treated as stale).
+`meta.schemaVersion` follows semver. Additive fields bump minor; anything
+that changes the meaning of an existing field bumps major.

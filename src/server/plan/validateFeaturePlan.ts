@@ -5,11 +5,11 @@ import { computeInfrastructureNodes } from "@/lib/infrastructure";
 import { FeaturePlanSchema, type FeaturePlan } from "@/types/featurePlan";
 
 /**
- * The safety net every Bob-facing write tool in this codebase applies
+ * The safety net every agent-facing write tool in this codebase applies
  * (see contribute_domain_concept, create_onboarding_journey): a FeaturePlan
  * is `ai-interpreted` (ProvenanceSchema, src/types/knowledge-model.ts) —
- * Bob's own reasoning about a feature that doesn't exist yet, generated in
- * Bob's own session (src/server/bob-tools/planTools.ts's
+ * the agent's own reasoning about a feature that doesn't exist yet, generated in
+ * the agent's own session (src/server/bob-tools/planTools.ts's
  * `propose_feature_plan`), never by this app calling an LLM itself.
  *
  * The non-negotiable rule carried over from every deterministic module in
@@ -69,7 +69,7 @@ export function validateFeaturePlan(
     if (status === "existing" && !realFileIds.has(s.filePath)) {
       status = "new";
       downgraded = true;
-      evidence.push(`Bob referenced "${s.filePath}" as an existing file, but it wasn't found in the repository — treated as a new file instead.`);
+      evidence.push(`the agent referenced "${s.filePath}" as an existing file, but it wasn't found in the repository — treated as a new file instead.`);
     }
     return {
       id: `plan-step-${i}`,
@@ -86,7 +86,7 @@ export function validateFeaturePlan(
       const match = e.kind === "domain" ? domainByName.get(e.name.toLowerCase()) : infraByName.get(e.name.toLowerCase());
       if (!match) {
         downgraded = true;
-        evidence.push(`Bob referenced "${e.name}" as an impacted ${e.kind}, but it wasn't found in the repository — dropped.`);
+        evidence.push(`the agent referenced "${e.name}" as an impacted ${e.kind}, but it wasn't found in the repository — dropped.`);
         return null;
       }
       return { kind: e.kind, id: match.id, name: e.name, reason: e.reason };
@@ -97,7 +97,7 @@ export function validateFeaturePlan(
     .map((f) => {
       if (!realFileIds.has(f.filePath)) {
         downgraded = true;
-        evidence.push(`Bob listed "${f.filePath}" as a file to modify, but it wasn't found in the repository — dropped.`);
+        evidence.push(`the agent listed "${f.filePath}" as a file to modify, but it wasn't found in the repository — dropped.`);
         return null;
       }
       return f;

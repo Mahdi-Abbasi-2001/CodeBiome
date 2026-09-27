@@ -4,7 +4,7 @@ import type { WorldModel, WorldRegion, WorldLandmark, WorldPath, VisualState } f
 const LANDMARK_IMPORTANCE_THRESHOLD = 0.6;
 
 // Naming heuristics used ONLY here, in the deterministic World Model
-// builder — never in the renderer, never by Bob. They classify a module's
+// builder — never in the renderer, never by the agent. They classify a module's
 // *world entity type* from facts that already exist in the RKM (module
 // name/path, file types, risk indicators). They are honest best-effort
 // signals, not a real entry-point/data-flow analyzer — see

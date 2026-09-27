@@ -1,11 +1,11 @@
 /**
- * Resolves this deployment's own public base URL, so a World URL Bob hands
+ * Resolves this deployment's own public base URL, so a World URL the agent hands
  * back to a developer always points at wherever CodeBiome actually is —
  * never hardcoded (docs/WORLD_ARCHITECTURE.md).
  *
  * Precedence: an explicit override, then Vercel's own stable production
  * domain (set automatically on every deployment — not the per-deployment
- * preview URL, which would break Bob's link on the next redeploy), then
+ * preview URL, which would break the agent's link on the next redeploy), then
  * Vercel's general deployment URL (covers preview deployments too), then
  * localhost for `npm run dev`/`npm run start`.
  */

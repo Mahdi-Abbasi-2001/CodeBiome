@@ -222,7 +222,7 @@ export function LandingHero({ onAnalyze }: { onAnalyze?: (url: string) => void }
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 32, fontSize: 14, color: "#9CA6AC" }}>
           <a href="#">How it works</a>
-          <a href="#">Bob</a>
+          <a href="#">MCP clients</a>
           <a
             href="#"
             style={{
@@ -271,9 +271,9 @@ export function LandingHero({ onAnalyze }: { onAnalyze?: (url: string) => void }
           to be explored.
         </h1>
         <p style={{ fontSize: 17, lineHeight: 1.6, color: "#B7BDC3", maxWidth: 520, margin: "0 0 32px" }}>
-          Paste a GitHub URL. CodeBiome runs deterministic repository analysis, builds a Knowledge Model of its
-          architecture, health and risk — then renders it as a living world you can walk through, with Bob as your
-          guide.
+          Paste a GitHub URL. An AI agent — CodeBiome&apos;s own built-in one, or any MCP client you connect yourself —
+          explores the real code and tells CodeBiome what it found; every claim is checked against the real files before
+          it&apos;s rendered as a living world you can walk through.
         </p>
 
         <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 520 }}>

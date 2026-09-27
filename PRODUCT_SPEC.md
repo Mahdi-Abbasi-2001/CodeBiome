@@ -1,5 +1,16 @@
 # Repository World — Product Specification
 
+> **Historical record.** This is the original hackathon vision document. The
+> product has since evolved twice: first from the 2.5D avatar-navigable
+> world described here to a flat, five-lens 2D dashboard (Architecture /
+> Onboarding / Flow / Health / Plan), and then from "IBM Bob as a hardcoded
+> intelligence layer" to "any MCP-compatible agent, verified against real
+> files, with CodeBiome itself never analyzing the repository." See
+> [`README.md`](./README.md) and [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
+> for what's actually built today. Kept for historical reference — the
+> underlying goal (help someone understand an unfamiliar codebase quickly,
+> grounded in real facts) is unchanged even though the mechanism is not.
+
 ## Vision
 
 Transform any public GitHub repository into an interactive world that

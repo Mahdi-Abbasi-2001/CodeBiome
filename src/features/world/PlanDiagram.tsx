@@ -14,7 +14,7 @@ import { StepGlyph, softColor, TEAL, AMBER, INDIGO, PURPLE, CORAL, SKYBLUE, NEUT
 /**
  * The one AI-INTERPRETED tab (see src/server/plan/validateFeaturePlan.ts's
  * doc comment) — everything else in this app is a statically reconstructed
- * fact. Unlike Flow/Journey, this app never generates a plan itself: Bob
+ * fact. Unlike Flow/Journey, this app never generates a plan itself: the agent
  * (an external MCP client — a developer's own IDE session) proposes it via
  * `propose_feature_plan` while answering the developer directly, and this
  * tab is purely a VIEWER for what's already been stored and validated. The
@@ -55,7 +55,7 @@ type Selected = { kind: "step"; step: FeaturePlanStep } | { kind: "entity"; enti
 /**
  * Pure client-side heuristics grounded in this repository's real detected
  * infra/domains — no LLM call, no invented technology. These are things to
- * ask Bob, not a local form to submit — see the tab's empty state.
+ * ask the agent, not a local form to submit — see the tab's empty state.
  */
 function suggestFeatures(domains: Domain[], infraNodes: InfraNode[]): string[] {
   const suggestions: string[] = [];
@@ -175,11 +175,11 @@ export function PlanDiagram({
               marginBottom: 18,
             }}
           >
-            AI-SUGGESTED — proposed by Bob, not verified, not yet built
+            AI-SUGGESTED — proposed by the agent, not verified, not yet built
           </div>
           <h1 style={{ fontFamily: "'Space Grotesk',system-ui,sans-serif", fontSize: 20, fontWeight: 600, margin: "0 0 10px" }}>No feature plans yet</h1>
           <p style={{ fontSize: 13.5, color: "#9CA6AC", maxWidth: 440, lineHeight: 1.6, margin: "0 0 28px" }}>
-            Ask Bob about a feature in your IDE — e.g. &quot;how would I implement a wishlist in this repo?&quot; — and the plan it proposes will show up here automatically.
+            Ask the agent about a feature in your IDE — e.g. &quot;how would I implement a wishlist in this repo?&quot; — and the plan it proposes will show up here automatically.
           </p>
           {onRefresh && (
             <button
@@ -300,7 +300,7 @@ export function PlanDiagram({
               marginBottom: 18,
             }}
           >
-            AI-SUGGESTED — proposed by Bob, not verified, not yet built
+            AI-SUGGESTED — proposed by the agent, not verified, not yet built
           </div>
 
           {plan && (

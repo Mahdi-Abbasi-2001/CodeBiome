@@ -1,5 +1,7 @@
 # Deploying CodeBiome to Vercel
 
+> **Historical record (mostly still accurate).** This is a real deployment investigation report, including genuine bugs found and fixed against a live Vercel deployment and a real IBM Bob session. The infrastructure findings (Vercel instance behavior, Blob storage setup, the one-Vercel-Function consolidation) remain accurate. Some names have since changed: `bobEventBus` → `activityEventBus`, `/api/bob-events` → `/api/agent-events`, `knowledgeModelStore` was removed entirely (no per-commit analysis cache exists anymore — see [`docs/REPOSITORY_KNOWLEDGE_MODEL.md`](./REPOSITORY_KNOWLEDGE_MODEL.md)). See [`docs/MCP_CLIENTS.md`](./MCP_CLIENTS.md) for current MCP client setup.
+
 This document covers making the existing CodeBiome application (unchanged
 architecture, visual design, deterministic pipeline, RKM, FlowModel, Bob
 integration, onboarding journeys) deployable to Vercel with a working

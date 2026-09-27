@@ -26,13 +26,13 @@ const nextConfig = {
   // the query-destination form worked on real Vercel but was found not to
   // reliably propagate under `next start` (see the route file's doc
   // comment). The original request's own query string (e.g.
-  // `/api/bob-events?worldId=...`) is still forwarded automatically.
+  // `/api/agent-events?worldId=...`) is still forwarded automatically.
   async rewrites() {
     return [
       { source: "/api/mcp", destination: "/api/bridge/mcp" },
       { source: "/api/analyze", destination: "/api/bridge/analyze" },
       { source: "/api/session-context", destination: "/api/bridge/session-context" },
-      { source: "/api/bob-events", destination: "/api/bridge/bob-events" },
+      { source: "/api/agent-events", destination: "/api/bridge/agent-events" },
     ];
   },
 };

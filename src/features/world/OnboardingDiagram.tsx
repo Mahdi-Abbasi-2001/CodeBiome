@@ -9,14 +9,14 @@ import { WorldHud, type WorldLens } from "./WorldHud";
 import { StepGlyph, softColor, TEAL, INDIGO, GHOST, INK } from "./StepGlyph";
 
 /**
- * The Onboarding tab is a pure viewer, mirroring PlanDiagram exactly: Bob
+ * The Onboarding tab is a pure viewer, mirroring PlanDiagram exactly: the agent
  * (an external MCP client — a developer's own IDE session) is the only
  * thing that ever calls `create_onboarding_journey` while answering a
  * developer's "how does X work?" question — this app never authors a
  * journey itself. Unlike a FeaturePlan, every step here already points at a
  * REAL, verified module (src/server/bob-tools/onboardingTools.ts's
  * `findModule` rejects the whole call otherwise) — there is no "new" vs
- * "existing" distinction to render, only Bob's chosen order and reasons.
+ * "existing" distinction to render, only the agent's chosen order and reasons.
  */
 
 const STEP_W = 132;
@@ -98,11 +98,11 @@ export function OnboardingDiagram({
               marginBottom: 18,
             }}
           >
-            AI-GUIDED — narrated by Bob, every module referenced is real and verified
+            AI-GUIDED — narrated by the agent, every module referenced is real and verified
           </div>
           <h1 style={{ fontFamily: "'Space Grotesk',system-ui,sans-serif", fontSize: 20, fontWeight: 600, margin: "0 0 10px" }}>No onboarding journeys yet</h1>
           <p style={{ fontSize: 13.5, color: "#9CA6AC", maxWidth: 440, lineHeight: 1.6, margin: "0 0 28px" }}>
-            Ask Bob in your IDE — e.g. &quot;walk me through how order creation works&quot; — and the journey it creates will show up here automatically.
+            Ask the agent in your IDE — e.g. &quot;walk me through how order creation works&quot; — and the journey it creates will show up here automatically.
           </p>
           {onRefresh && (
             <button
@@ -193,7 +193,7 @@ export function OnboardingDiagram({
               marginBottom: 18,
             }}
           >
-            AI-GUIDED — narrated by Bob, every module referenced is real and verified
+            AI-GUIDED — narrated by the agent, every module referenced is real and verified
           </div>
 
           {journey && (

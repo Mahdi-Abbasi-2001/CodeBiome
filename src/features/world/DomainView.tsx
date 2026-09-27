@@ -178,7 +178,7 @@ export function DomainView({ snapshot, domainId, onZoomOut }: { snapshot: WorldS
           </g>
         ))}
 
-        {/* Bob — a visual guide only, never a click target, and never allowed to sit on top of a building */}
+        {/* the agent — a visual guide only, never a click target, and never allowed to sit on top of a building */}
         <g pointerEvents="none" style={{ transition: "transform 0.6s ease" }} transform={`translate(${bobPos[0]},${bobPos[1]})`}>
           <ellipse cx="0" cy="18" rx="10" ry="3" fill="#000" opacity="0.35" />
           <rect x="-6" y="-6" width="12" height="20" rx="5" fill="#B9C8FF" />

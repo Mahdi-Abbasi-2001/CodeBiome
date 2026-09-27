@@ -1,4 +1,4 @@
-import { classifyLayer } from "@/server/flows/inferFlows";
+import { classifyLayer } from "./classifyLayer";
 import type { FlowStepKind } from "@/types/flow";
 import type { RiskIndicator } from "@/types/knowledge-model";
 

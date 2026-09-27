@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { NextRequest } from "next/server";
 import { GET, POST, DELETE } from "./route";
 import { seedWorld } from "@/server/testing/worldFixture";
@@ -6,7 +6,7 @@ import { seedWorld } from "@/server/testing/worldFixture";
 /**
  * Deployment-sensitive behavior for the `/api/bridge/[target]` route family
  * that backs `/api/mcp`, `/api/analyze`, `/api/session-context`, and
- * `/api/bob-events` via `next.config.mjs` `rewrites()` — see route.ts's doc
+ * `/api/agent-events` via `next.config.mjs` `rewrites()` — see route.ts's doc
  * comment and docs/VERCEL_DEPLOYMENT.md for the real Next.js 14.2.35
  * output-file-tracing defect found during deployment investigation (fixed
  * via `experimental.outputFileTracingExcludes`, not this route's shape),
@@ -59,7 +59,7 @@ async function seed(repoId: { owner: string; repo: string }) {
   return { model, worldId: world.id };
 }
 
-describe("/api/bridge/[target] (backing /api/mcp, /api/analyze, /api/session-context, /api/bob-events)", () => {
+describe("/api/bridge/[target] (backing /api/mcp, /api/analyze, /api/session-context, /api/agent-events)", () => {
   describe("routing", () => {
     it("dispatches target=mcp to the real MCP transport (tools/list)", async () => {
       const listRes = await callPost("mcp", { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
@@ -69,7 +69,7 @@ describe("/api/bridge/[target] (backing /api/mcp, /api/analyze, /api/session-con
       expect(names).toContain("create_onboarding_journey");
       expect(names).toContain("get_current_context");
       expect(names).toContain("propose_feature_plan");
-      expect(names.length).toBe(24);
+      expect(names.length).toBe(32);
     });
 
     it("returns 405 for GET on a POST-only target", async () => {
@@ -78,7 +78,7 @@ describe("/api/bridge/[target] (backing /api/mcp, /api/analyze, /api/session-con
     });
 
     it("returns 405 for POST on a GET-only target", async () => {
-      const res = await callPost("bob-events");
+      const res = await callPost("agent-events");
       expect(res.status).toBe(405);
     });
 
@@ -104,9 +104,52 @@ describe("/api/bridge/[target] (backing /api/mcp, /api/analyze, /api/session-con
       expect(res.status).toBe(400);
     });
 
-    it("GET bob-events requires a worldId query param, forwarded through the rewrite", async () => {
-      const res = await callGet("bob-events");
+    it("GET agent-events requires a worldId query param, forwarded through the rewrite", async () => {
+      const res = await callGet("agent-events");
       expect(res.status).toBe(400);
+    });
+  });
+
+  describe("MCP_AUTH_TOKEN gating (target=mcp only)", () => {
+    const originalToken = process.env.MCP_AUTH_TOKEN;
+    afterEach(() => {
+      if (originalToken === undefined) delete process.env.MCP_AUTH_TOKEN;
+      else process.env.MCP_AUTH_TOKEN = originalToken;
+    });
+
+    it("stays open with no auth header when MCP_AUTH_TOKEN is unset (local-dev default)", async () => {
+      delete process.env.MCP_AUTH_TOKEN;
+      const res = await callPost("mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" });
+      expect(res.status).toBe(200);
+    });
+
+    it("rejects a request with no/wrong Authorization header once MCP_AUTH_TOKEN is set", async () => {
+      process.env.MCP_AUTH_TOKEN = "s3cret";
+      const noHeader = await callPost("mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" });
+      expect(noHeader.status).toBe(401);
+
+      const wrongHeader = await POST(
+        req("mcp", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: "Bearer wrong" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+        }),
+        { params: { target: "mcp" } }
+      );
+      expect(wrongHeader.status).toBe(401);
+    });
+
+    it("allows a request with the correct Bearer token", async () => {
+      process.env.MCP_AUTH_TOKEN = "s3cret";
+      const res = await POST(
+        req("mcp", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: "Bearer s3cret" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+        }),
+        { params: { target: "mcp" } }
+      );
+      expect(res.status).toBe(200);
     });
   });
 
@@ -128,7 +171,7 @@ describe("/api/bridge/[target] (backing /api/mcp, /api/analyze, /api/session-con
       expect(parsed).toMatchObject({ hasSelection: true, selectedModule: { id: moduleId, name: "orderController" } });
     });
 
-    it("an onboarding journey created via target=mcp is retrievable via list_onboarding_journeys and published to target=bob-events", async () => {
+    it("an onboarding journey created via target=mcp is retrievable via list_onboarding_journeys and published to target=agent-events", async () => {
       const { model, worldId } = await seed({ owner: "disp2", repo: "app" });
       const moduleId = model.modules.find((m) => m.path.includes("controllers"))!.id;
 
@@ -151,11 +194,11 @@ describe("/api/bridge/[target] (backing /api/mcp, /api/analyze, /api/session-con
 
       // The rewrite forwards the original query string through unchanged —
       // confirm worldId survives the same way it would for a real
-      // /api/bob-events?worldId=... request. bobEvents.ts polls the durable
+      // /api/agent-events?worldId=... request. bobEvents.ts polls the durable
       // worldStore rather than pushing instantly (see its own doc comment)
       // — the initial `getEventsSince(worldId, 0)` call already returns
       // everything published so far, so no poll wait is needed here.
-      const eventsRes = await callGet("bob-events", `?worldId=${encodeURIComponent(worldId)}`);
+      const eventsRes = await callGet("agent-events", `?worldId=${encodeURIComponent(worldId)}`);
       expect(eventsRes.status).toBe(200);
       const reader = eventsRes.body!.getReader();
       const decoder = new TextDecoder();

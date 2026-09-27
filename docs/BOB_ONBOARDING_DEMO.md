@@ -1,5 +1,7 @@
 # Onboarding-Journey Demo Script — IBM Bob + CodeBiome
 
+> **Historical record.** This demo walkthrough predates the agent-submission architecture rework — onboarding journeys are still a real, current feature, but the surrounding analysis pipeline described here has changed (see [`docs/REPOSITORY_KNOWLEDGE_MODEL.md`](./REPOSITORY_KNOWLEDGE_MODEL.md)). Kept for historical reference.
+
 3–5 minutes. Every step below was actually run against a real IBM Bob 2.0
 session (Bob Shell) and a real repository during development — see
 [`BOB_INTEGRATION.md` §10.6](./BOB_INTEGRATION.md#106-the-onboarding-journey-capability-52-validated-end-to-end-with-real-ibm-bob-20)

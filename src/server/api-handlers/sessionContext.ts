@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { sessionContextStore, type SessionContext } from "@/server/bob/sessionContext";
+import { sessionContextStore, type SessionContext } from "@/server/agent/sessionContext";
 
 /**
  * The browser POSTs here whenever the developer's selection/walkthrough
@@ -7,11 +7,11 @@ import { sessionContextStore, type SessionContext } from "@/server/bob/sessionCo
  * WorldExperience.tsx) — this is the only way CodeBiome's server (and
  * therefore the `get_current_context` MCP tool) can know what's currently
  * on screen, since that state lives in React, not on the server. See
- * src/server/bob/sessionContext.ts.
+ * src/server/agent/sessionContext.ts.
  *
  * Keyed by World id (docs/WORLD_ARCHITECTURE.md), not repositoryId — reads
  * through `worldStore`, so it's correct regardless of which Vercel instance
- * handles this request versus whichever handles Bob's `get_current_context`
+ * handles this request versus whichever handles the agent's `get_current_context`
  * call.
  */
 export async function handleSessionContext(req: NextRequest): Promise<Response> {

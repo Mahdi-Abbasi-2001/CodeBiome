@@ -16,7 +16,8 @@ export const ProvenanceSchema = z.union([
   z.object({
     source: z.literal("ai-interpreted"),
     confidence: z.number().min(0).max(1),
-    generatedBy: z.literal("bob"),
+    /** Free-text name of the connected MCP agent/client that submitted this (e.g. "claude-code", "cursor", "codebiome-demo-agent") — never a hardcoded single agent. */
+    generatedBy: z.string(),
     modelVersion: z.string(),
   }),
 ]);
@@ -206,7 +207,7 @@ export const DomainConceptSchema = z.object({
   provenance: z.object({
     source: z.literal("ai-interpreted"),
     confidence: z.number(),
-    generatedBy: z.literal("bob"),
+    generatedBy: z.string(),
     modelVersion: z.string(),
   }),
 });
@@ -275,7 +276,7 @@ export const RepositoryKnowledgeModelSchema = z.object({
   security: SecurityReportSchema,
   tests: TestIntelligenceSchema,
   documentation: DocumentationReportSchema,
-  /** AI-derived. Empty until Bob interpretation is implemented. */
+  /** AI-derived. Empty until the agent interpretation is implemented. */
   domainConcepts: z.array(DomainConceptSchema),
 });
 

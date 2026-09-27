@@ -1,5 +1,7 @@
 # Hackathon Demo Script — IBM Bob + CodeBiome
 
+> **Historical record.** This demo script predates both the 2D-lens UI rework and the agent-submission architecture rework. See [`docs/DEMO_SCRIPT.md`](./DEMO_SCRIPT.md) for the current demo script. Kept for historical reference.
+
 3–5 minutes. Every step below was actually run against a real IBM Bob 2.0
 session and a real repository during development — see
 [`BOB_INTEGRATION.md` §9](./BOB_INTEGRATION.md#9-how-this-was-actually-verified--with-real-ibm-bob-20)

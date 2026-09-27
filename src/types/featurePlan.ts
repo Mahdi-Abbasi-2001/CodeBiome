@@ -5,7 +5,7 @@ import { ConfidenceLevelSchema } from "./flow";
  * A FeaturePlan is fundamentally different from Flow/Journey: those are
  * STATICALLY RECONSTRUCTED from real code that already exists. A FeaturePlan
  * is `ai-interpreted` (see ProvenanceSchema, src/types/knowledge-model.ts) —
- * Bob reasoning about a feature that does NOT exist yet, grounded against
+ * the agent reasoning about a feature that does NOT exist yet, grounded against
  * the real Repository Knowledge Model but never claiming to be a fact.
  *
  * The one hard invariant carried over from Flow/Journey: any reference to

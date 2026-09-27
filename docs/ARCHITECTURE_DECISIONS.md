@@ -1,5 +1,7 @@
 # Architecture Decisions — Hackathon Vertical Slice
 
+> **Historical record.** These are the infrastructure decisions made during the original hackathon build. Some described components (the analyzer pipeline, the `BobClient`/`src/types/bob.ts` stub) have since been removed or replaced — see [`docs/REPOSITORY_KNOWLEDGE_MODEL.md`](./REPOSITORY_KNOWLEDGE_MODEL.md), [`docs/WORLD_ARCHITECTURE.md`](./WORLD_ARCHITECTURE.md), and [`docs/MCP_CLIENTS.md`](./MCP_CLIENTS.md) for the current architecture. The reasoning below (Vercel Hobby-tier constraints, why Zod, why an MCP server rather than an outbound LLM call) remains accurate background even where specific file paths have moved.
+
 This records the infrastructure review performed before scaffolding, in
 response to a hard constraint: **48-hour hackathon, targeting Vercel's free
 (Hobby) tier**, first working slice being:

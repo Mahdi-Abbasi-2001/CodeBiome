@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import type { WorldRecord, WorldSnapshot, WorldMutableState } from "@/types/world";
 import { EMPTY_WORLD_MUTABLE_STATE } from "@/types/world";
-import type { BobEvent } from "@/types/bob-events";
+import type { AgentEvent } from "@/types/agent-events";
 import { createWorldId } from "./id";
 
 /**
@@ -12,12 +12,12 @@ import { createWorldId } from "./id";
  *
  * WHY THIS EXISTS: every other store in this project so far
  * (`knowledgeModelStore`, `sessionContextStore`, `domainConceptStore`,
- * `onboardingJourneyStore`, `bobEventBus`) is a plain in-memory `Map` —
+ * `onboardingJourneyStore`, `activityEventBus`) is a plain in-memory `Map` —
  * correct within one warm process, but Vercel does not guarantee that two
- * independent HTTP requests (a browser's `/api/analyze`, then Bob's own
+ * independent HTTP requests (a browser's `/api/analyze`, then the agent's own
  * `/api/mcp` call moments later) land on the same instance. Empirically
  * confirmed during the prior deployment phase (docs/VERCEL_DEPLOYMENT.md
- * §3): this is common enough in practice to break the core Bob-first
+ * §3): this is common enough in practice to break the core agent-first
  * workflow, not a rare edge case. A World must be readable from ANY
  * instance, so its identity, its analysis snapshot, and its mutable
  * interpretation state all live in Vercel Blob — the smallest
@@ -62,13 +62,23 @@ export interface WorldStore {
   }): Promise<WorldRecord>;
   getWorld(worldId: string): Promise<WorldRecord | null>;
   getSnapshot(worldId: string): Promise<WorldSnapshot | null>;
+  /**
+   * Read-modify-write against a World's snapshot — the mechanism every
+   * submit_* MCP tool uses to grow the knowledge model incrementally (see
+   * src/server/mcp-tools/submissionHelpers.ts). Unlike the old analyzer
+   * pipeline, which built a snapshot once and never touched it again, the
+   * snapshot here is a living document a connected agent builds up call by
+   * call.
+   */
+  updateSnapshot(worldId: string, updater: (snapshot: WorldSnapshot) => WorldSnapshot): Promise<WorldSnapshot>;
   getLatestWorldIdForRepository(repositoryId: string): Promise<string | null>;
+  /** @deprecated No longer used by any tool's World-resolution path (docs/WORLD_ARCHITECTURE.md) — a per-connection default replaced the old "most recent World across the deployment" fallback. Kept only because deleting it would ripple through all three store implementations for no behavioral gain. */
   getMostRecentWorldId(): Promise<string | null>;
   getMutableState(worldId: string): Promise<WorldMutableState>;
   updateMutableState(worldId: string, updater: (state: WorldMutableState) => WorldMutableState): Promise<WorldMutableState>;
-  appendEvent(worldId: string, event: BobEvent): Promise<void>;
+  appendEvent(worldId: string, event: AgentEvent): Promise<void>;
   /** Events after `sinceIndex` (exclusive), plus the new highest index — for SSE catch-up across instances. */
-  getEventsSince(worldId: string, sinceIndex: number): Promise<{ events: BobEvent[]; latestIndex: number }>;
+  getEventsSince(worldId: string, sinceIndex: number): Promise<{ events: AgentEvent[]; latestIndex: number }>;
 }
 
 const MAX_STORED_EVENTS = 200;
@@ -83,7 +93,7 @@ class InMemoryWorldStore implements WorldStore {
   private records = new Map<string, WorldRecord>();
   private snapshots = new Map<string, WorldSnapshot>();
   private mutableState = new Map<string, WorldMutableState>();
-  private events = new Map<string, BobEvent[]>();
+  private events = new Map<string, AgentEvent[]>();
   private latestByRepository = new Map<string, string>();
   private mostRecentWorldId: string | null = null;
 
@@ -111,6 +121,14 @@ class InMemoryWorldStore implements WorldStore {
     return this.snapshots.get(worldId) ?? null;
   }
 
+  async updateSnapshot(worldId: string, updater: (snapshot: WorldSnapshot) => WorldSnapshot) {
+    const current = this.snapshots.get(worldId);
+    if (!current) throw new WorldNotFoundError(worldId);
+    const next = updater(current);
+    this.snapshots.set(worldId, next);
+    return next;
+  }
+
   async getLatestWorldIdForRepository(repositoryId: string) {
     return this.latestByRepository.get(repositoryId) ?? null;
   }
@@ -129,7 +147,7 @@ class InMemoryWorldStore implements WorldStore {
     return next;
   }
 
-  async appendEvent(worldId: string, event: BobEvent) {
+  async appendEvent(worldId: string, event: AgentEvent) {
     const list = this.events.get(worldId) ?? [];
     list.push(event);
     if (list.length > MAX_STORED_EVENTS) list.shift();
@@ -212,6 +230,14 @@ class FileWorldStore implements WorldStore {
     return this.getJson<WorldSnapshot>(path.join(this.worldDir(worldId), "snapshot.json"));
   }
 
+  async updateSnapshot(worldId: string, updater: (snapshot: WorldSnapshot) => WorldSnapshot) {
+    const current = await this.getSnapshot(worldId);
+    if (!current) throw new WorldNotFoundError(worldId);
+    const next = updater(current);
+    await this.putJson(path.join(this.worldDir(worldId), "snapshot.json"), next);
+    return next;
+  }
+
   async getLatestWorldIdForRepository(repositoryId: string) {
     const pointer = await this.getJson<{ worldId: string }>(
       path.join(LOCAL_STORE_DIR, "index", "by-repository", `${sanitizeKey(repositoryId)}.json`)
@@ -235,14 +261,14 @@ class FileWorldStore implements WorldStore {
     return next;
   }
 
-  async appendEvent(worldId: string, event: BobEvent) {
-    const current = (await this.getJson<BobEvent[]>(path.join(this.worldDir(worldId), "events.json"))) ?? [];
+  async appendEvent(worldId: string, event: AgentEvent) {
+    const current = (await this.getJson<AgentEvent[]>(path.join(this.worldDir(worldId), "events.json"))) ?? [];
     const next = [...current, event].slice(-MAX_STORED_EVENTS);
     await this.putJson(path.join(this.worldDir(worldId), "events.json"), next);
   }
 
   async getEventsSince(worldId: string, sinceIndex: number) {
-    const events = (await this.getJson<BobEvent[]>(path.join(this.worldDir(worldId), "events.json"))) ?? [];
+    const events = (await this.getJson<AgentEvent[]>(path.join(this.worldDir(worldId), "events.json"))) ?? [];
     return { events: events.slice(sinceIndex), latestIndex: events.length };
   }
 }
@@ -256,7 +282,7 @@ class BlobWorldStore implements WorldStore {
   private recordCache = new Map<string, WorldRecord>();
   private snapshotCache = new Map<string, WorldSnapshot>();
   private mutableStateCache = new Map<string, WorldMutableState>();
-  private eventsCache = new Map<string, BobEvent[]>();
+  private eventsCache = new Map<string, AgentEvent[]>();
   private repoIndexCache = new Map<string, string>();
   private mostRecentCache: string | null = null;
 
@@ -326,6 +352,15 @@ class BlobWorldStore implements WorldStore {
     return snapshot;
   }
 
+  async updateSnapshot(worldId: string, updater: (snapshot: WorldSnapshot) => WorldSnapshot) {
+    const current = await this.getSnapshot(worldId);
+    if (!current) throw new WorldNotFoundError(worldId);
+    const next = updater(current);
+    await this.putJson(`worlds/${worldId}/snapshot.json`, next);
+    this.snapshotCache.set(worldId, next);
+    return next;
+  }
+
   async getLatestWorldIdForRepository(repositoryId: string) {
     const cached = this.repoIndexCache.get(repositoryId);
     if (cached) return cached;
@@ -361,20 +396,20 @@ class BlobWorldStore implements WorldStore {
     return next;
   }
 
-  async appendEvent(worldId: string, event: BobEvent) {
+  async appendEvent(worldId: string, event: AgentEvent) {
     const cached = this.eventsCache.get(worldId);
-    const current = cached ?? (await this.getJson<BobEvent[]>(`worlds/${worldId}/events.json`)) ?? [];
+    const current = cached ?? (await this.getJson<AgentEvent[]>(`worlds/${worldId}/events.json`)) ?? [];
     const next = [...current, event].slice(-MAX_STORED_EVENTS);
     this.eventsCache.set(worldId, next);
     // Fire-and-forget from the caller's perspective is tempting, but a
-    // dropped write here means Bob's action silently never reaches a
+    // dropped write here means the agent's action silently never reaches a
     // browser on a different instance — worth the extra latency to await.
     await this.putJson(`worlds/${worldId}/events.json`, next);
   }
 
   async getEventsSince(worldId: string, sinceIndex: number) {
     const cached = this.eventsCache.get(worldId);
-    const events = cached ?? (await this.getJson<BobEvent[]>(`worlds/${worldId}/events.json`)) ?? [];
+    const events = cached ?? (await this.getJson<AgentEvent[]>(`worlds/${worldId}/events.json`)) ?? [];
     if (!cached) this.eventsCache.set(worldId, events);
     return { events: events.slice(sinceIndex), latestIndex: events.length };
   }

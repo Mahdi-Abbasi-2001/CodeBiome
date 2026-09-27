@@ -1,5 +1,7 @@
 # Connecting IBM Bob IDE to a Remote CodeBiome MCP Server
 
+> **Historical record.** Written for connecting a local IBM Bob install to a deployed CodeBiome instance. See [`docs/MCP_CLIENTS.md`](./MCP_CLIENTS.md) for current, client-agnostic setup (any MCP client, plus the `MCP_AUTH_TOKEN` auth option this document predates). Kept for historical reference.
+
 This document is the remote-deployment counterpart to
 [`BOB_INTEGRATION.md` §13](./BOB_INTEGRATION.md#13-local-development--setup),
 which covers pointing Bob at a `localhost` CodeBiome instance. Everything

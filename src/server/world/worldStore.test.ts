@@ -1,8 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { worldStore } from "./worldStore";
 import { buildTestKnowledgeModel } from "@/server/testing/knowledgeModelFixture";
-import { inferFlows } from "@/server/flows/inferFlows";
-import { inferJourneys } from "@/server/journeys/inferJourneys";
 import { buildWorldModel } from "@/server/world/builder";
 
 /**
@@ -25,11 +23,10 @@ async function buildSnapshotFor(repoId: { owner: string; repo: string }) {
     { "src/index.js": `console.log('hi');\n` },
     repoId
   );
-  const flowModel = inferFlows(knowledgeModel);
   return {
     knowledgeModel,
-    flowModel,
-    journeyModel: inferJourneys(knowledgeModel, flowModel),
+    flowModel: { meta: { repositoryKnowledgeModelId: knowledgeModel.meta.repositoryId, generatedAt: knowledgeModel.meta.generatedAt }, flows: [] },
+    journeyModel: { meta: { repositoryKnowledgeModelId: knowledgeModel.meta.repositoryId, generatedAt: knowledgeModel.meta.generatedAt }, journeys: [] },
     worldModel: buildWorldModel(knowledgeModel),
   };
 }
