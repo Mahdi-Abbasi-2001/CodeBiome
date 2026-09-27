@@ -108,40 +108,53 @@ function maxSymmetricOffset(point: Vec2, dir: Vec2): number {
   );
 }
 
-/**
- * Shared by both branches (anchored at the junction) and an overcrowded
- * main-sequence stop (anchored at the stop's own waypoint): the largest
- * radius reachable in ANY direction from `anchor` before hitting a canvas
- * edge — the yard-corner waypoint ([1110,748]) has far less room on two
- * sides than the entrance ([430,740]) does, so this is computed per-call.
- */
-function computeSafeRadius(anchor: Vec2): number {
-  const maxRadiusFromEdges = Math.min(
-    anchor[0] - EDGE_MARGIN,
-    CANVAS_WIDTH - EDGE_MARGIN - anchor[0],
-    anchor[1] - EDGE_MARGIN,
-    CANVAS_HEIGHT - EDGE_MARGIN - anchor[1]
-  );
-  return Math.max(40, Math.min(320, maxRadiusFromEdges));
-}
-
 // The standard sunflower/phyllotaxis spacing constant: placing point `i` of
-// `n` at angle `i * GOLDEN_ANGLE`, radius `maxRadius * sqrt((i+0.5)/n)`,
-// fills a disk with close-to-even spacing between every point and never
-// repeats an angle for any realistic n — an EARLIER version of this (fixed
-// angle step per fixed-size ring, ring radius growing by a flat amount) could
+// `n` at angle `i * GOLDEN_ANGLE`, radius scaled by `sqrt((i+0.5)/n)`, fills
+// a disk with close-to-even spacing between every point and never repeats
+// an angle for any realistic n — an EARLIER version of this (fixed angle
+// step per fixed-size ring, ring radius growing by a flat amount) could
 // still land two rings at the identical radius when a tight anchor forced
 // their spacing to ~0, and its per-ring angle stagger wasn't reliably enough
 // separation on its own (found live: two items only ~5px apart). This has no
 // such failure mode — every point gets a genuinely distinct radius.
 const GOLDEN_ANGLE = 2.399963229728653;
 
-function spiralPosition(anchor: Vec2, primaryDir: Vec2, secondaryDir: Vec2, index: number, count: number, maxRadius: number): Vec2 {
-  const radius = maxRadius * Math.sqrt((index + 0.5) / count);
+/**
+ * `index`'s position in a phyllotaxis spiral around `anchor`, along
+ * `primaryDir`/`secondaryDir` — an ELLIPSE, not a circle: `primaryRadius`
+ * and `secondaryRadius` are each that direction's own safe distance from
+ * `anchor` (see maxSymmetricOffset) and can be very different (a waypoint
+ * near the canvas edge has much less room in one direction than the
+ * other — using their shared minimum as a single circular radius wasted
+ * all the extra room the roomier direction actually had, and still left
+ * a crowded result: confirmed live, 7 siblings at ~40px apart where the
+ * tight axis alone allowed room for ~70px, the other for ~163px).
+ */
+function spiralPosition(
+  anchor: Vec2,
+  primaryDir: Vec2,
+  secondaryDir: Vec2,
+  index: number,
+  count: number,
+  primaryRadius: number,
+  secondaryRadius: number
+): Vec2 {
+  const t = Math.sqrt((index + 0.5) / count);
   const angle = index * GOLDEN_ANGLE;
-  const dirX = primaryDir[0] * Math.cos(angle) - secondaryDir[0] * Math.sin(angle);
-  const dirY = primaryDir[1] * Math.cos(angle) - secondaryDir[1] * Math.sin(angle);
-  return [anchor[0] + dirX * radius, anchor[1] + dirY * radius];
+  const rp = primaryRadius * t * Math.cos(angle);
+  const rs = secondaryRadius * t * Math.sin(angle);
+  const x = anchor[0] + primaryDir[0] * rp - secondaryDir[0] * rs;
+  const y = anchor[1] + primaryDir[1] * rp - secondaryDir[1] * rs;
+  // primaryRadius/secondaryRadius are each safe ALONE, but a rotated
+  // ellipse's extent along a single screen axis (x or y) isn't simply
+  // bounded by either one — the two contributions can add up in the same
+  // screen direction. Clamping the final point is the one guarantee that
+  // doesn't depend on getting that trigonometry exactly right: whatever the
+  // spiral math produces, the result never actually leaves the canvas.
+  return [
+    Math.min(CANVAS_WIDTH - EDGE_MARGIN, Math.max(EDGE_MARGIN, x)),
+    Math.min(CANVAS_HEIGHT - EDGE_MARGIN, Math.max(EDGE_MARGIN, y)),
+  ];
 }
 
 export function computeDomainSequence(domain: Domain, knowledgeModel: RepositoryKnowledgeModel): DomainSequence {
@@ -229,12 +242,16 @@ export function computeDomainSequence(domain: Domain, knowledgeModel: Repository
     // the same mechanism branches already use — instead of continuing to
     // compress every sibling onto one increasingly narrow line.
     const useSpiral = files.length > 1 && spacing < MIN_READABLE_SPACING;
-    const spiralRadius = useSpiral ? computeSafeRadius(point) : 0;
     const forwardUnit: Vec2 = [dx / len, dy / len];
+    // The avenue direction usually has more real room than the sideways one
+    // does (a waypoint near an edge is near it along ONE axis, not both) —
+    // an ellipse using each direction's own safe distance uses that extra
+    // room instead of treating both directions as equally cramped.
+    const forwardOffset = useSpiral ? Math.min(MAX_LATERAL_SPREAD / 2, maxSymmetricOffset(point, forwardUnit)) : 0;
 
     files.forEach((f, j) => {
       const position: Vec2 = useSpiral
-        ? spiralPosition(point, perp, forwardUnit, j, files.length, spiralRadius)
+        ? spiralPosition(point, perp, forwardUnit, j, files.length, maxOffset, forwardOffset)
         : [point[0] + perp[0] * (j - (files.length - 1) / 2) * spacing, point[1] + perp[1] * (j - (files.length - 1) / 2) * spacing];
       buildings.push({
         fileId: f.fileId,
@@ -270,11 +287,15 @@ export function computeDomainSequence(domain: Domain, knowledgeModel: Repository
   const forkPerp: Vec2 = [-forkDy / forkLen, forkDx / forkLen];
   const junction: Vec2 = [forkPoint[0] + (forkDx / forkLen) * 90, forkPoint[1] + (forkDy / forkLen) * 90];
 
-  const branchRadius = computeSafeRadius(junction);
   const forkForward: Vec2 = [forkDx / forkLen, forkDy / forkLen];
+  // Same ellipse reasoning as the overcrowded main-sequence stop below: use
+  // each axis's own safe distance from the junction, not their shared
+  // minimum as one circular radius.
+  const branchPerpRadius = Math.min(320, maxSymmetricOffset(junction, forkPerp));
+  const branchForwardRadius = Math.min(320, maxSymmetricOffset(junction, forkForward));
 
   const branches = branchCandidates.map((f, i) => {
-    const position = spiralPosition(junction, forkPerp, forkForward, i, branchCandidates.length, branchRadius);
+    const position = spiralPosition(junction, forkPerp, forkForward, i, branchCandidates.length, branchPerpRadius, branchForwardRadius);
     const building: PlacedBuilding = {
       fileId: f.fileId,
       path: f.path,
