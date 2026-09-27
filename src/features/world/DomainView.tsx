@@ -192,17 +192,46 @@ export function DomainView({ snapshot, domainId, onZoomOut }: { snapshot: WorldS
         <svg viewBox="0 0 1440 900" style={{ width: "100%", height: "100%", overflow: "visible" }}>
           <foreignObject x="0" y="0" width="1440" height="900">
             <div style={{ position: "relative", width: 1440, height: 900 }}>
-              {sequence.buildings.map((b) => (
-                <div key={b.fileId} style={{ position: "absolute", left: b.position[0] - 110, top: b.position[1] + 20, width: 220, textAlign: "center" }}>
-                  <div style={{ fontFamily: "'Space Grotesk',system-ui,sans-serif", fontSize: b.role === "service" ? 15 : 12.5, fontWeight: b.role === "service" ? 700 : 600, color: b.damaged ? "#F4C6BC" : "#F8F6EF" }}>
-                    {humanizeFileName(b.path)}
+              {sequence.buildings.map((b) =>
+                b.compact ? (
+                  // A crowded cluster (many branches, or a main-sequence stop
+                  // that had to spiral) can't fit a 220px label per item
+                  // without them overlapping regardless of how well the
+                  // POSITIONS are spread — this is a smaller, name-only label
+                  // instead of pretending the wide one still fits. The full
+                  // role/risk detail is one click away in the Investigation
+                  // panel, so nothing is actually lost, just not always shown.
+                  <div
+                    key={b.fileId}
+                    title={`${humanizeFileName(b.path)} — ${ROLE_LABEL[b.role] ?? b.role}`}
+                    style={{ position: "absolute", left: b.position[0] - 55, top: b.position[1] + 16, width: 110, textAlign: "center" }}
+                  >
+                    <div
+                      style={{
+                        fontFamily: "'Space Grotesk',system-ui,sans-serif",
+                        fontSize: 9.5,
+                        fontWeight: 600,
+                        color: b.damaged ? "#F4C6BC" : "#F8F6EF",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {humanizeFileName(b.path)}
+                    </div>
                   </div>
-                  <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: b.damaged ? "#E0553F" : b.role === "service" ? "#F2B84B" : "#6B7580" }}>
-                    {b.damaged ? "risk · " : ""}
-                    {ROLE_LABEL[b.role] ?? b.role}
+                ) : (
+                  <div key={b.fileId} style={{ position: "absolute", left: b.position[0] - 110, top: b.position[1] + 20, width: 220, textAlign: "center" }}>
+                    <div style={{ fontFamily: "'Space Grotesk',system-ui,sans-serif", fontSize: b.role === "service" ? 15 : 12.5, fontWeight: b.role === "service" ? 700 : 600, color: b.damaged ? "#F4C6BC" : "#F8F6EF" }}>
+                      {humanizeFileName(b.path)}
+                    </div>
+                    <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: b.damaged ? "#E0553F" : b.role === "service" ? "#F2B84B" : "#6B7580" }}>
+                      {b.damaged ? "risk · " : ""}
+                      {ROLE_LABEL[b.role] ?? b.role}
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              )}
             </div>
           </foreignObject>
         </svg>

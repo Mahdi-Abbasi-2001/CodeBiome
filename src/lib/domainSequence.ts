@@ -13,6 +13,16 @@ export interface PlacedBuilding {
   onMainSequence: boolean;
   order: number | null;
   damaged: boolean;
+  /**
+   * True when this building is one of a genuinely crowded group — spiral
+   * placement was needed at all (main-sequence overflow), or there are
+   * enough branches that a full-size label would overlap its neighbors
+   * regardless of how well the POSITIONS are spread. DomainView.tsx uses
+   * this to shrink the label rather than pretend a wide label fits: no
+   * amount of position math makes a 220px-wide label fit in the ~57px of
+   * clearance seven real landmarks can have in a fixed-size canvas corner.
+   */
+  compact: boolean;
 }
 
 export interface YardInfo {
@@ -76,6 +86,16 @@ const MAX_LATERAL_SPREAD = 560;
 // (each has a 220px-wide label) well before it's actually unsafe — past
 // this point a stop switches to spiral placement instead of compressing further.
 const MIN_READABLE_SPACING = 110;
+// Below THIS, DomainView.tsx's normal 220px-wide, two-line label starts
+// visibly overlapping its neighbors even once the POSITIONS are spread as
+// well as this file can manage — found live, comparing a 45-item group at
+// ~74px (its full labels read fine — short names, and 220px is a box, not
+// how wide the actual centered text renders) against a 7-item group at
+// ~57px (visibly broken — much longer names, e.g. "ProductController").
+// Lower than MIN_READABLE_SPACING on purpose: that one decides whether
+// POSITIONING needs to change; this one decides whether the LABEL does,
+// checked separately against where things actually ended up.
+const COMPACT_LABEL_THRESHOLD = 65;
 // A real domain's files rarely match a backend-shaped role at all (a React
 // feature folder full of components/hooks is entirely "function" — every
 // one of them becomes a branch candidate here), so branch counts in the
@@ -86,6 +106,18 @@ const EDGE_MARGIN = 90; // roughly half a building's own footprint plus its labe
 
 function isYardOrder(order: number | null): boolean {
   return order !== null && YARD_ORDERS.has(order);
+}
+
+function minPairwiseDistance(positions: Vec2[]): number {
+  if (positions.length < 2) return Infinity;
+  let min = Infinity;
+  for (let i = 0; i < positions.length; i++) {
+    for (let j = i + 1; j < positions.length; j++) {
+      const d = Math.hypot(positions[i][0] - positions[j][0], positions[i][1] - positions[j][1]);
+      if (d < min) min = d;
+    }
+  }
+  return min;
 }
 
 /**
@@ -249,19 +281,29 @@ export function computeDomainSequence(domain: Domain, knowledgeModel: Repository
     // room instead of treating both directions as equally cramped.
     const forwardOffset = useSpiral ? Math.min(MAX_LATERAL_SPREAD / 2, maxSymmetricOffset(point, forwardUnit)) : 0;
 
-    files.forEach((f, j) => {
-      const position: Vec2 = useSpiral
+    const positions = files.map((f, j): Vec2 =>
+      useSpiral
         ? spiralPosition(point, perp, forwardUnit, j, files.length, maxOffset, forwardOffset)
-        : [point[0] + perp[0] * (j - (files.length - 1) / 2) * spacing, point[1] + perp[1] * (j - (files.length - 1) / 2) * spacing];
+        : [point[0] + perp[0] * (j - (files.length - 1) / 2) * spacing, point[1] + perp[1] * (j - (files.length - 1) / 2) * spacing]
+    );
+    // Whether the label needs to shrink is a question about the ACTUAL
+    // achieved spacing, not the item count or which placement strategy ran —
+    // checked against the real computed positions rather than estimated,
+    // so a well-spread stop with a wide safe area doesn't shrink
+    // unnecessarily just because it also happened to need the spiral.
+    const compact = minPairwiseDistance(positions) < COMPACT_LABEL_THRESHOLD;
+
+    files.forEach((f, j) => {
       buildings.push({
         fileId: f.fileId,
         path: f.path,
         moduleId: f.moduleId,
         role: f.role,
-        position,
+        position: positions[j],
         onMainSequence: true,
         order,
         damaged: isDamaged(f.fileId),
+        compact,
       });
     });
   });
@@ -294,17 +336,25 @@ export function computeDomainSequence(domain: Domain, knowledgeModel: Repository
   const branchPerpRadius = Math.min(320, maxSymmetricOffset(junction, forkPerp));
   const branchForwardRadius = Math.min(320, maxSymmetricOffset(junction, forkForward));
 
+  const branchPositions = branchCandidates.map(
+    (f, i): Vec2 => spiralPosition(junction, forkPerp, forkForward, i, branchCandidates.length, branchPerpRadius, branchForwardRadius)
+  );
+  // Checked against the real computed positions, same as the main-sequence
+  // stop above — a handful of branches with a wide safe area to spiral
+  // across can end up just as comfortably spaced as a normal stop.
+  const branchesCompact = minPairwiseDistance(branchPositions) < COMPACT_LABEL_THRESHOLD;
+
   const branches = branchCandidates.map((f, i) => {
-    const position = spiralPosition(junction, forkPerp, forkForward, i, branchCandidates.length, branchPerpRadius, branchForwardRadius);
     const building: PlacedBuilding = {
       fileId: f.fileId,
       path: f.path,
       moduleId: f.moduleId,
       role: f.role,
-      position,
+      position: branchPositions[i],
       onMainSequence: false,
       order: null,
       damaged: isDamaged(f.fileId),
+      compact: branchesCompact,
     };
     return { from: junction, building };
   });
