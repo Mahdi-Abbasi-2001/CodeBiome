@@ -25,6 +25,13 @@ export interface EntryPointAnalyzerOutput {
 const ROUTE_PATTERNS: { framework: string; pattern: RegExp }[] = [
   // Express / Fastify / Koa
   { framework: "Express-style", pattern: /\b(?:app|router)\.(?:get|post|put|delete|patch)\s*\(\s*['"`]([^'"`]+)['"`]/g },
+  // Express Router's chained form — `router.route('/path').get(h).post(h)` —
+  // a distinct, very common convention from the inline `router.get('/path', h)`
+  // style above: the path is the argument to `.route(...)`, and the verb(s)
+  // that follow carry no literal path of their own for the regex above to
+  // ever match. Real repos using this style (found via BOB_REMOTE_MCP-style
+  // demo-repo testing) previously produced zero detected routes.
+  { framework: "Express Router (chained)", pattern: /\b(?:app|router)\.route\s*\(\s*['"`]([^'"`]+)['"`]/g },
   // NestJS / Angular decorators
   { framework: "NestJS", pattern: /@(?:Get|Post|Put|Delete|Patch)\s*\(\s*['"`]?([^'")`]*)['"`]?\s*\)/g },
   // Spring
@@ -89,6 +96,12 @@ function detectNextPage(filePath: string): { routePath: string } | null {
 const FRONTEND_PAGE_PATTERNS: { framework: string; pattern: RegExp }[] = [
   { framework: "React Router", pattern: /<Route\s+[^>]*?path\s*=\s*["']([^"']+)["']/g },
 ];
+
+// Defensive bound only — a real route file has a handful to a few dozen
+// registrations; this just keeps a pathological file (a vendored bundle that
+// slipped past the binary/size filters) from generating an unbounded number
+// of entry points.
+const MAX_ROUTE_MATCHES_PER_FILE = 50;
 
 const CLI_PATH_PATTERN = /(^|\/)(bin|cli)(\/|$)/i;
 const APP_STARTUP_FILENAME = /^(index|main|server|app)\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb)$/i;
@@ -240,26 +253,43 @@ export const entryPointAnalyzer: Analyzer<EntryPointAnalyzerOutput> = {
         continue;
       }
 
-      let bestPath: string | null = null;
+      // Pick whichever framework's pattern matches first (same priority order
+      // as before), then — unlike before — collect EVERY distinct route that
+      // pattern finds in the file, not just the first. A real route file
+      // routinely registers a dozen endpoints; surfacing only one silently
+      // threw away the rest of that file's real, matchable entry points (and
+      // starved flow inference — see server/flows/inferFlows.ts — of anything
+      // to build most of its flows from).
       let bestFramework: string | null = null;
+      let bestPattern: RegExp | null = null;
       for (const { framework, pattern } of ROUTE_PATTERNS) {
         pattern.lastIndex = 0;
-        const match = pattern.exec(content);
-        if (match) {
+        if (pattern.test(content)) {
           bestFramework = framework;
-          bestPath = match[1] || null;
+          bestPattern = pattern;
           break;
         }
       }
 
-      if (bestFramework) {
-        entryPoints.push({
-          id: `entry-${counter++}`,
-          type: "http-route",
-          name: bestPath ? bestPath : file.path.split("/").pop()!,
-          fileId: file.id,
-          detectionEvidence: `Matched a ${bestFramework} route pattern`,
-        });
+      if (bestFramework && bestPattern) {
+        bestPattern.lastIndex = 0;
+        const seenRouteKeys = new Set<string>();
+        let match: RegExpExecArray | null;
+        let matchIndex = 0;
+        while ((match = bestPattern.exec(content)) && matchIndex < MAX_ROUTE_MATCHES_PER_FILE) {
+          const routePath = match[1] || null;
+          const routeKey = routePath ?? `#${matchIndex}`;
+          matchIndex++;
+          if (seenRouteKeys.has(routeKey)) continue; // e.g. GET and POST registered separately on the same literal path
+          seenRouteKeys.add(routeKey);
+          entryPoints.push({
+            id: `entry-${counter++}`,
+            type: "http-route",
+            name: routePath ? routePath : file.path.split("/").pop()!,
+            fileId: file.id,
+            detectionEvidence: `Matched a ${bestFramework} route pattern`,
+          });
+        }
         seenFiles.add(file.id);
         continue;
       }

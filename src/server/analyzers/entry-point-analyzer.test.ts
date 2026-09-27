@@ -82,6 +82,48 @@ describe("entry-point-analyzer", () => {
     });
   });
 
+  it("detects every distinct Express route in a file, not just the first", async () => {
+    const entryPoints = await entryPointsFor({
+      "src/routes.js": `const router = require('express').Router();\nrouter.get('/api/orders', () => {});\nrouter.post('/api/orders', () => {});\nrouter.get('/api/orders/:id', () => {});\n`,
+    });
+    const httpRoutes = entryPoints.filter((e) => e.type === "http-route");
+    expect(httpRoutes.map((e) => e.name)).toEqual(["/api/orders", "/api/orders/:id"]);
+  });
+
+  describe("Express Router's chained .route() form", () => {
+    it("detects a route registered via router.route(path).get(...)", async () => {
+      const entryPoints = await entryPointsFor({
+        "server/routes/product.routes.js": `import express from 'express'\nconst router = express.Router()\nrouter.route('/api/products')\n  .get(productCtrl.list)\n`,
+      });
+      expect(entryPoints).toContainEqual(
+        expect.objectContaining({ type: "http-route", name: "/api/products", detectionEvidence: expect.stringContaining("Express Router (chained)") })
+      );
+    });
+
+    it("detects every distinct .route(...) call in a real multi-route file", async () => {
+      const entryPoints = await entryPointsFor({
+        "server/routes/product.routes.js": [
+          "import express from 'express'",
+          "const router = express.Router()",
+          "router.route('/api/products/latest').get(productCtrl.listLatest)",
+          "router.route('/api/products').get(productCtrl.list)",
+          "router.route('/api/products/:productId').get(productCtrl.read)",
+          "router.route('/api/product/:shopId/:productId')",
+          "  .put(authCtrl.requireSignin, productCtrl.update)",
+          "  .delete(authCtrl.requireSignin, productCtrl.remove)",
+          "export default router",
+        ].join("\n"),
+      });
+      const httpRoutes = entryPoints.filter((e) => e.type === "http-route");
+      expect(httpRoutes.map((e) => e.name)).toEqual([
+        "/api/products/latest",
+        "/api/products",
+        "/api/products/:productId",
+        "/api/product/:shopId/:productId",
+      ]);
+    });
+  });
+
   it("still falls back to the app-startup naming heuristic when nothing stronger is found", async () => {
     const entryPoints = await entryPointsFor({
       "src/index.js": `console.log('booting');\n`,

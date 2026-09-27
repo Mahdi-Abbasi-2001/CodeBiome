@@ -108,6 +108,45 @@ describe("inferFlows", () => {
     expect(flow.confidence).toBe("high");
   });
 
+  it("names a flow after the resource, not a trailing connector word like 'by'", () => {
+    const files = [fakeFile("src/routes/product.routes.js"), fakeFile("src/controllers/product.controller.js")];
+    const modules = [fakeModule("src", files.map((f) => f.id))];
+    const dependencies = [edge("e1", "src/routes/product.routes.js", "src/controllers/product.controller.js")];
+    const entryPoints = [
+      { id: "entry-0", type: "http-route" as const, name: "/api/products/by/:shopId", fileId: "src/routes/product.routes.js", detectionEvidence: "Matched an Express Router (chained) route pattern" },
+    ];
+
+    const model = fakeModel(files, modules, dependencies, entryPoints);
+    const flowModel = inferFlows(model);
+
+    expect(flowModel.flows).toHaveLength(1);
+    expect(flowModel.flows[0].name).toBe("Products");
+  });
+
+  it("collapses distinctly-named routes into one flow when they resolve to the identical file-level chain", () => {
+    const files = [
+      fakeFile("src/routes/order.routes.js"),
+      fakeFile("src/controllers/order.controller.js"),
+      fakeFile("src/models/order.model.js"),
+    ];
+    const modules = [fakeModule("src", files.map((f) => f.id))];
+    const dependencies = [
+      edge("e1", "src/routes/order.routes.js", "src/controllers/order.controller.js"),
+      edge("e2", "src/controllers/order.controller.js", "src/models/order.model.js"),
+    ];
+    // Six different registered routes, all in the same route file — same
+    // shape as a real Express `router.route(path).get(...)` file exporting
+    // several endpoints that all happen to import the same controller.
+    const entryPoints = ["/api/orders/:userId", "/api/order/status_values", "/api/order/:orderId/charge/:userId/:shopId", "/api/order/:shopId/cancel/:productId", "/api/orders/shop/:shopId", "/api/orders/user/:userId"].map(
+      (name, i) => ({ id: `entry-${i}`, type: "http-route" as const, name, fileId: "src/routes/order.routes.js", detectionEvidence: "Matched an Express Router (chained) route pattern" })
+    );
+
+    const model = fakeModel(files, modules, dependencies, entryPoints);
+    const flowModel = inferFlows(model);
+
+    expect(flowModel.flows).toHaveLength(1);
+  });
+
   it("never references a file that doesn't exist in the model", () => {
     const files = [fakeFile("a.ts"), fakeFile("b.ts")];
     const modules = [fakeModule("root", files.map((f) => f.id))];

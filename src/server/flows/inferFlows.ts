@@ -74,6 +74,14 @@ function symbolFromFileName(path: string): string {
 
 const GENERIC_DIRS = new Set(["src", "app", "lib", "pkg", "packages", "apps", "controllers", "services", "routes", "handlers", "api"]);
 
+// REST paths routinely end in a connector word rather than the resource name
+// itself — "/api/products/by/:shopId", "/api/shops/by/:userId" — and always
+// taking the literal last segment collapsed both into the same flow name
+// ("By"), silently discarding one via the name-based dedup below. Preferring
+// the last segment that ISN'T one of these (falling back to the true last
+// segment only if every segment is one) keeps the name tied to the resource.
+const GENERIC_PATH_WORDS = new Set(["by", "of", "for", "in", "with", "and", "or", "to", "from"]);
+
 /**
  * Prefers, in order: (1) a real HTTP path segment when the framework
  * expressed one as a leading-slash string (Express/Flask/Laravel/Rails
@@ -89,7 +97,9 @@ function deriveFlowName(entryPoint: EntryPoint, filePath: string): string {
       .filter(Boolean)
       .filter((s) => !s.startsWith(":") && !s.startsWith("{") && !/^\d+$/.test(s))
       .filter((s) => !["api", "v1", "v2", "v3"].includes(s.toLowerCase()));
-    if (segments.length > 0) return humanizeIdentifier(segments[segments.length - 1]);
+    const meaningful = segments.filter((s) => !GENERIC_PATH_WORDS.has(s.toLowerCase()));
+    const chosen = meaningful.length > 0 ? meaningful[meaningful.length - 1] : segments[segments.length - 1];
+    if (chosen) return humanizeIdentifier(chosen);
   }
 
   const dirs = filePath.split("/").slice(0, -1);
@@ -249,11 +259,25 @@ export function inferFlows(model: RepositoryKnowledgeModel): FlowModel {
     });
   }
 
+  // Two different HTTP routes registered in the same file (very common —
+  // one route file often exports a dozen endpoints) can resolve to the
+  // IDENTICAL chain: this walks file-to-file dependency edges, not a call
+  // graph, so it has no way to tell apart two routes that share an entry
+  // file past that file's own best-scored outgoing edge. Presenting both as
+  // separate flows would overstate how finely this can actually distinguish
+  // them, so only the first-built (typically the file's first-registered,
+  // most-representative route) survives per distinct chain.
+  const bestByChain = new Map<string, Flow>();
+  for (const flow of candidates) {
+    const chainKey = flow.steps.map((s) => s.entityId).join(">");
+    if (!bestByChain.has(chainKey)) bestByChain.set(chainKey, flow);
+  }
+
   // Dedup by name keeping the best-scoring variant (a name can appear twice
   // above if two different entry points independently produced it before
   // the running usedNames max was known at insert time).
   const bestByName = new Map<string, Flow>();
-  for (const flow of candidates) {
+  for (const flow of bestByChain.values()) {
     const key = flow.name.toLowerCase();
     const prev = bestByName.get(key);
     if (!prev || scoreFlowCandidate(flow.steps) > scoreFlowCandidate(prev.steps)) bestByName.set(key, flow);

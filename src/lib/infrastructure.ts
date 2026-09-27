@@ -13,6 +13,17 @@ export interface InfraNode {
   fileIds: string[];
   /** Real domains those files belong to — where the physical connection is drawn to. */
   domainIds: string[];
+  /**
+   * How many of this node's evidence files fall in each domain — e.g. a
+   * frontend framework genuinely used for server-side rendering (one file
+   * under the backend domain, dozens under the client domain) has real
+   * evidence in both, but overwhelmingly in one. Callers that need to pick
+   * ONE dominant framework per domain (see ArchitectureDiagram.tsx's
+   * client/application tier split) should compare THIS, not just presence
+   * in `domainIds` — the domain-agnostic file count on the node overall
+   * would let a single SSR import outweigh an entire backend framework.
+   */
+  domainFileCounts: Record<string, number>;
   confidence: number;
 }
 
@@ -32,11 +43,11 @@ export function computeInfrastructureNodes(knowledgeModel: RepositoryKnowledgeMo
   for (const detection of knowledgeModel.repository.frameworks) {
     if (!KNOWN_CATEGORIES.has(detection.category as InfraCategory)) continue;
 
-    const domainIds = new Set<string>();
+    const domainFileCounts = new Map<string, number>();
     for (const fileId of detection.evidence) {
       const moduleId = fileToModule.get(fileId);
       const domain = moduleId ? domainForModule(domains, moduleId) : null;
-      if (domain) domainIds.add(domain.id);
+      if (domain) domainFileCounts.set(domain.id, (domainFileCounts.get(domain.id) ?? 0) + 1);
     }
 
     nodes.push({
@@ -44,7 +55,8 @@ export function computeInfrastructureNodes(knowledgeModel: RepositoryKnowledgeMo
       name: detection.name,
       category: detection.category as InfraCategory,
       fileIds: detection.evidence,
-      domainIds: [...domainIds],
+      domainIds: [...domainFileCounts.keys()],
+      domainFileCounts: Object.fromEntries(domainFileCounts),
       confidence: detection.confidence,
     });
   }

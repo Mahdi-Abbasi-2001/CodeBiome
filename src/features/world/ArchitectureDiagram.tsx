@@ -112,11 +112,20 @@ function buildArchGraph(domains: Domain[], bridges: DomainBridge[], connectivity
   const frameworkInfra = infraNodes.filter((n) => n.category === "frontend" || n.category === "backend" || n.category === "fullstack");
   const serviceInfra = infraNodes.filter((n) => n.category !== "frontend" && n.category !== "backend" && n.category !== "fullstack");
 
+  // A domain can legitimately have real evidence for MORE THAN ONE framework
+  // — e.g. a backend domain that server-side-renders its frontend framework
+  // has both, real. Picking "frontend always wins" as the tie-break used to
+  // mean one server-rendering file could outweigh an entire real backend
+  // framework's worth of evidence in the SAME domain. Compare the evidence
+  // actually IN this domain instead: whichever framework has more of its own
+  // files here is the one that actually explains this domain's tier.
   const frameworkByDomain = new Map<string, InfraNode>();
   for (const fw of frameworkInfra) {
     for (const domainId of fw.domainIds) {
       const existing = frameworkByDomain.get(domainId);
-      if (!existing || fw.category === "frontend") frameworkByDomain.set(domainId, fw);
+      const fwCount = fw.domainFileCounts[domainId] ?? 0;
+      const existingCount = existing?.domainFileCounts[domainId] ?? -1;
+      if (!existing || fwCount > existingCount) frameworkByDomain.set(domainId, fw);
     }
   }
   const serviceDomainIds = new Set<string>();
