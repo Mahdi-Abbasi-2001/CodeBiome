@@ -55,14 +55,22 @@ export interface HealthReport {
 }
 
 const SEVERITY_DEDUCTION: Record<VulnerabilityItem["severity"], number> = { critical: 15, high: 10, moderate: 5, low: 2 };
+const SEVERITY_CAP: Record<VulnerabilityItem["severity"], number> = { critical: 30, high: 20, moderate: 15, low: 10 };
 const SEVERITY_RANK: Record<VulnerabilityItem["severity"], number> = { critical: 3, high: 2, moderate: 1, low: 0 };
+const STRESSED_DOMAIN_CAP = 20;
+const CRITICAL_DOMAIN_CAP = 20;
 
 /**
  * Starts at 100 and only ever subtracts — every deduction is disclosed in
  * `breakdown` so the number is never a black box. Weights are a judgment
  * call (disclosed to the user, not hidden): a critical secret match costs
  * more than a large file, a critical-tier domain costs more than a
- * stressed one. Clamped to [0, 100].
+ * stressed one. Every category is individually capped (the same idea
+ * already used for large files) so one abundant-but-repetitive category —
+ * a large repository naturally has more large files, more modules, more
+ * chances for a few real findings — can't alone floor the whole score at
+ * 0; only a repository with real problems spread across several
+ * categories should ever actually hit the floor. Clamped to [0, 100].
  */
 function computeScore(params: {
   vulnerabilities: VulnerabilityItem[];
@@ -79,7 +87,7 @@ function computeScore(params: {
   for (const severity of ["critical", "high", "moderate", "low"] as const) {
     const count = bySeverity.get(severity);
     if (!count) continue;
-    const delta = -(SEVERITY_DEDUCTION[severity] * count);
+    const delta = -Math.min(SEVERITY_CAP[severity], SEVERITY_DEDUCTION[severity] * count);
     value += delta;
     breakdown.push({ label: `${count} ${severity} security finding${count === 1 ? "" : "s"}`, delta });
   }
@@ -91,13 +99,13 @@ function computeScore(params: {
   }
 
   if (params.stressedDomainCount > 0) {
-    const delta = -(params.stressedDomainCount * 5);
+    const delta = -Math.min(STRESSED_DOMAIN_CAP, params.stressedDomainCount * 5);
     value += delta;
     breakdown.push({ label: `${params.stressedDomainCount} stressed domain${params.stressedDomainCount === 1 ? "" : "s"}`, delta });
   }
 
   if (params.criticalDomainCount > 0) {
-    const delta = -(params.criticalDomainCount * 10);
+    const delta = -Math.min(CRITICAL_DOMAIN_CAP, params.criticalDomainCount * 10);
     value += delta;
     breakdown.push({ label: `${params.criticalDomainCount} critical domain${params.criticalDomainCount === 1 ? "" : "s"}`, delta });
   }

@@ -108,16 +108,30 @@ function extensionOf(filePath: string): string {
   return name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
 }
 
+const TEST_DIR_NAMES = new Set(["test", "tests", "__tests__"]);
+
 function classifyFile(filePath: string, isBinary: boolean): StructureFile["type"] {
   const name = (filePath.split("/").pop() ?? "").toLowerCase();
   const ext = extensionOf(filePath);
   if (isBinary) return "asset";
-  if (
-    /\.(test|spec)\.[jt]sx?$/.test(name) ||
-    filePath.includes("__tests__") ||
-    filePath.includes("/test/") ||
-    filePath.includes("/tests/")
-  ) {
+  // Directory-name match uses path SEGMENTS, not a raw substring — a raw
+  // `.includes("/tests/")` check misses a repo-ROOT tests/ directory
+  // (e.g. "tests/e2e/foo.ts" has no leading slash before "tests", so the
+  // substring never appears) even though a nested one like
+  // "packages/api/tests/foo.ts" would match. This was found scanning real
+  // repositories: a root-level tests/ directory's files were being
+  // classified as ordinary source and so weren't excluded from the
+  // security-pattern scan, misreporting the fixtures' fake credentials as
+  // findings.
+  const segments = filePath.toLowerCase().split("/");
+  const dirSegments = segments.slice(0, -1);
+  // The double-extension suffix (".test.ts", ".spec.tsx") only ever
+  // appears before the file's real extension, so matching on the stem
+  // covers every JS-family extension (js/jsx/ts/tsx/mjs/cjs/mts/cts) at
+  // once instead of an extension allowlist that quietly misses newer ones
+  // (found ".test.mjs" files misclassified this way in a real repo).
+  const stem = ext ? name.slice(0, -(ext.length + 1)) : name;
+  if (/\.(test|spec)$/.test(stem) || dirSegments.some((seg) => TEST_DIR_NAMES.has(seg))) {
     return "test";
   }
   if (CONFIG_FILENAMES.has(name) || ["yml", "yaml", "toml", "ini"].includes(ext)) return "config";

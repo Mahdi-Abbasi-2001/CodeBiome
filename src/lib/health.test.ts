@@ -76,7 +76,7 @@ describe("computeHealthReport", () => {
     expect(report.strengths.map((s) => s.id)).not.toContain("readme");
   });
 
-  it("never lets the score go below 0", async () => {
+  it("caps the deduction for one severity instead of scaling it unboundedly with finding count", async () => {
     const { model, worldModel } = await fixture();
     model.security.patternMatches = Array.from({ length: 20 }, (_, i) => ({
       fileId: `f${i}.ts`,
@@ -84,6 +84,23 @@ describe("computeHealthReport", () => {
       rule: "aws-access-key-id",
       severity: "critical" as const,
     }));
+
+    const report = computeHealthReport(model, worldModel);
+    expect(report.vulnerabilities).toHaveLength(20);
+    expect(report.score.breakdown).toContainEqual({ label: "20 critical security findings", delta: -30 });
+    expect(report.score.value).toBe(70);
+  });
+
+  it("still floors at 0 once real problems add up across multiple categories, even with per-category caps", async () => {
+    const { model, worldModel } = await fixture();
+    model.security.patternMatches = [
+      ...Array.from({ length: 5 }, (_, i) => ({ fileId: `c${i}.ts`, line: 1, rule: "aws-access-key-id", severity: "critical" as const })),
+      ...Array.from({ length: 5 }, (_, i) => ({ fileId: `h${i}.ts`, line: 1, rule: "slack-token", severity: "high" as const })),
+      ...Array.from({ length: 5 }, (_, i) => ({ fileId: `m${i}.ts`, line: 1, rule: "hardcoded-secret-assignment", severity: "moderate" as const })),
+      ...Array.from({ length: 5 }, (_, i) => ({ fileId: `l${i}.ts`, line: 1, rule: "hardcoded-secret-assignment", severity: "low" as const })),
+    ];
+    model.codeHealth.largeFiles = Array.from({ length: 10 }, (_, i) => ({ fileId: `big${i}.ts`, linesOfCode: 900 }));
+    model.documentation.readme.exists = false;
 
     const report = computeHealthReport(model, worldModel);
     expect(report.score.value).toBe(0);

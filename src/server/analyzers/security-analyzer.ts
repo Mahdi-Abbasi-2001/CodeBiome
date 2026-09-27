@@ -35,7 +35,17 @@ const RULES: { id: string; pattern: RegExp; severity: SecurityFinding["severity"
   },
 ];
 
-const SKIP_TYPES = new Set(["asset", "build-output", "generated"]);
+// "test" and "documentation" are skipped deliberately, not as an
+// afterthought: a test fixture asserting against a fake PEM block or a
+// docs page showing "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE" matches these
+// patterns exactly, but it's the intended content of that file, not a
+// leaked credential. Scanning them turns every repository with reasonable
+// test coverage or configuration docs into a wall of false positives (seen
+// firsthand against real repos: dozens of "findings" that were entirely
+// `tests/test_*.py` fixtures and `docs/*.md` examples) — real secrets that
+// matter are ones that could reach production, which means source/config
+// files, not test or documentation content.
+const SKIP_TYPES = new Set(["asset", "build-output", "generated", "test", "documentation"]);
 
 /**
  * Populates RepositoryKnowledgeModel.security.patternMatches with real,

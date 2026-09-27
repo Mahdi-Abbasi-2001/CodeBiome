@@ -52,3 +52,30 @@ describe("structure-analyzer module grouping", () => {
     expect(output.modules.map((m) => m.id)).toContain("root");
   });
 });
+
+describe("structure-analyzer file classification", () => {
+  it("classifies a file under a REPO-ROOT tests/ directory as a test file (regression: a leading-slash substring check missed this)", async () => {
+    const output = await run({ "tests/e2e/login.shared.ts": "" });
+    const file = output.files.find((f) => f.path === "tests/e2e/login.shared.ts")!;
+    expect(file.type).toBe("test");
+    expect(file.isTestFile).toBe(true);
+  });
+
+  it("classifies a file under a nested tests/ directory as a test file", async () => {
+    const output = await run({ "packages/api/tests/handler.ts": "" });
+    const file = output.files.find((f) => f.path === "packages/api/tests/handler.ts")!;
+    expect(file.type).toBe("test");
+  });
+
+  it("classifies a *.test.mjs file as a test file (regression: the extension allowlist missed mjs/cjs)", async () => {
+    const output = await run({ "scripts/smoke.test.mjs": "" });
+    const file = output.files.find((f) => f.path === "scripts/smoke.test.mjs")!;
+    expect(file.type).toBe("test");
+  });
+
+  it("does not misclassify an ordinary directory that merely contains the substring 'test'", async () => {
+    const output = await run({ "src/latest/feature.ts": "" });
+    const file = output.files.find((f) => f.path === "src/latest/feature.ts")!;
+    expect(file.type).toBe("source");
+  });
+});
