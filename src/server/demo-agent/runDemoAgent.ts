@@ -39,8 +39,47 @@ export type DemoAgentEvent =
 // https://console.groq.com/docs/models before changing this, since model
 // availability on Groq's free tier moves faster than this comment can.
 const DEFAULT_MODEL = "openai/gpt-oss-120b";
-const DEFAULT_MAX_TURNS = 30;
-const MAX_OUTPUT_TOKENS = 4096;
+const DEFAULT_MAX_TURNS = 15;
+const MAX_OUTPUT_TOKENS = 1024;
+const MAX_TOOL_RESULT_CHARS = 2000;
+
+/**
+ * Groq's free plan caps every text model at 8,000 tokens/minute — and since
+ * a stateless chat-completions API resends the full tool-schema payload on
+ * every single turn, sending all 31 real MCP tools (with their full,
+ * capable-agent-oriented descriptions) blew that budget before the model
+ * even replied once. This is a demo-agent-only concession: real MCP clients
+ * (Claude, Cursor, etc.) aren't token-constrained the same way and keep
+ * getting the full tool surface with full descriptions over MCP itself —
+ * only what THIS in-process loop sends to Groq is trimmed.
+ */
+const ESSENTIAL_TOOLS: Record<string, string> = {
+  get_repository_overview: "Repository metadata: languages, file/module counts, entry points. Call first.",
+  search_repository: "Keyword search over module/file paths.",
+  get_file: "Fetch a file's real source by repository-relative path.",
+  submit_modules: "Submit real module boundaries you found: id/name/path/fileIds/importance.",
+  submit_dependencies: "Submit real dependency edges: fromId/toId/fromKind/toKind/relationship/confidence.",
+  submit_entry_points: "Submit real entry points: type/name/fileId/detectionEvidence.",
+  submit_frameworks: "Submit detected frameworks/technologies: name/category/evidence/confidence.",
+  submit_security_findings: "Submit security findings: patternMatches and/or vulnerableDependencies.",
+  submit_code_health: "Submit code-health signals: todos, dead code, test files, coverage, docs, git history.",
+  submit_flow: "Submit a statically-traced request flow: ordered steps through real files.",
+  submit_request_journey: "Submit a multi-page user journey: ordered steps through real files.",
+};
+
+/** Strips `description`/`title` keys from a JSON-schema tree — the per-field prose that helps a capable agent is pure token overhead for an 8K-TPM budget; type/enum/required constraints (what actually matters for a valid call) are untouched. */
+function stripSchemaVerbosity(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(stripSchemaVerbosity);
+  if (node && typeof node === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (key === "description" || key === "title") continue;
+      out[key] = stripSchemaVerbosity(value);
+    }
+    return out;
+  }
+  return node;
+}
 
 export function demoAgentAvailable(): boolean {
   return !!process.env.GROQ_API_KEY;
@@ -70,10 +109,10 @@ export async function runDemoAgent(
 
   const { tools: mcpTools } = await client.listTools();
   const tools: ChatCompletionTool[] = mcpTools
-    .filter((t) => t.name !== "analyze_repository")
+    .filter((t) => t.name in ESSENTIAL_TOOLS)
     .map((t) => ({
       type: "function",
-      function: { name: t.name, description: t.description ?? "", parameters: t.inputSchema as Record<string, unknown> },
+      function: { name: t.name, description: ESSENTIAL_TOOLS[t.name], parameters: stripSchemaVerbosity(t.inputSchema) as Record<string, unknown> },
     }));
 
   const groq = new Groq({ apiKey });
@@ -133,7 +172,11 @@ export async function runDemoAgent(
             content: { type: string; text?: string }[];
             isError?: boolean;
           };
-          const text = result.content.find((c) => c.type === "text")?.text ?? JSON.stringify(result);
+          const rawText = result.content.find((c) => c.type === "text")?.text ?? JSON.stringify(result);
+          // A single get_file call on a large file could otherwise consume
+          // most of Groq's free-tier 8,000-token/minute budget by itself —
+          // this keeps any one tool result from starving the rest of the run.
+          const text = rawText.length > MAX_TOOL_RESULT_CHARS ? `${rawText.slice(0, MAX_TOOL_RESULT_CHARS)}\n…(truncated — result was longer)` : rawText;
           onEvent({ type: "tool_call", tool: call.function.name, args, ok: !result.isError, summary: result.isError ? text : `${call.function.name} succeeded` });
           messages.push({ role: "tool", tool_call_id: call.id, content: text });
         } catch (error) {
