@@ -1,5 +1,5 @@
-import Groq from "groq-sdk";
-import type { ChatCompletionMessageParam, ChatCompletionTool } from "groq-sdk/resources/chat/completions";
+import OpenAI from "openai";
+import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -17,12 +17,13 @@ import { registerMcpTools } from "@/server/mcp-tools";
  * surface, that's real evidence the tool surface is sufficient for any
  * agent, not just this one.
  *
- * Uses Groq (free tier, OpenAI-compatible chat-completions API with tool
- * calling) rather than a paid provider, so the demo works without anyone
- * needing to fund an API key. Requires GROQ_API_KEY. Without it, this is
- * simply unavailable — the web UI falls back to telling the developer to
- * connect their own agent instead (see docs/MCP_CLIENTS.md); CodeBiome does
- * not otherwise make any outbound LLM call.
+ * Uses OpenRouter's free model pool (openrouter/free — an OpenAI-compatible
+ * chat-completions API with tool calling) rather than a paid provider, so
+ * the demo works without anyone needing to fund an API key. Requires
+ * OPENROUTER_API_KEY. Without it, this is simply unavailable — the web UI
+ * falls back to telling the developer to connect their own agent instead
+ * (see docs/MCP_CLIENTS.md); CodeBiome does not otherwise make any outbound
+ * LLM call.
  */
 
 export type DemoAgentEvent =
@@ -31,17 +32,14 @@ export type DemoAgentEvent =
   | { type: "done" }
   | { type: "error"; error: string };
 
-// Groq gates its most-known Llama models (llama-3.3-70b-versatile,
-// llama-3.1-8b-instant) behind an Enterprise/"contact sales" plan as of
-// this writing — a normal free-tier key gets a 404 "model not found" for
-// them. openai/gpt-oss-120b is a production model open to every account,
-// with real tool-calling support. Verify against
-// https://console.groq.com/docs/models before changing this, since model
-// availability on Groq's free tier moves faster than this comment can.
-const DEFAULT_MODEL = "openai/gpt-oss-120b";
+// OpenRouter's free pool (openrouter/free) routes to whatever free models
+// are available on the platform — currently poolside/laguna-s-2.1:free.
+// The model ID is a router, not a specific model, so the underlying model
+// may change over time. Override with DEMO_AGENT_MODEL if needed.
+const DEFAULT_MODEL = "openrouter/free";
 // Vercel Hobby caps this whole request at 60s (src/app/api/bridge/[target]/route.ts's
 // maxDuration) — a hard wall, not something a bigger token/turn budget can
-// buy its way past. Each turn is a real network round trip to Groq (often
+// buy its way past. Each turn is a real network round trip to OpenRouter (often
 // several seconds on a bigger repo's tool results), so this stays low
 // enough that a typical run has a real chance of finishing in time rather
 // than being killed mid-stream with no clean terminal event. The frontend
@@ -51,14 +49,14 @@ const MAX_OUTPUT_TOKENS = 1024;
 const MAX_TOOL_RESULT_CHARS = 2000;
 
 /**
- * Groq's free plan caps every text model at 8,000 tokens/minute — and since
+ * OpenRouter's free pool has rate limits that vary by model — and since
  * a stateless chat-completions API resends the full tool-schema payload on
  * every single turn, sending all 31 real MCP tools (with their full,
- * capable-agent-oriented descriptions) blew that budget before the model
- * even replied once. This is a demo-agent-only concession: real MCP clients
- * (Claude, Cursor, etc.) aren't token-constrained the same way and keep
- * getting the full tool surface with full descriptions over MCP itself —
- * only what THIS in-process loop sends to Groq is trimmed.
+ * capable-agent-oriented descriptions) would blow through those limits
+ * before the model even replied once. This is a demo-agent-only concession:
+ * real MCP clients (Claude, Cursor, etc.) aren't token-constrained the same
+ * way and keep getting the full tool surface with full descriptions over
+ * MCP itself — only what THIS in-process loop sends to OpenRouter is trimmed.
  */
 const ESSENTIAL_TOOLS: Record<string, string> = {
   get_repository_overview: "Repository metadata: languages, file/module counts, entry points. Call first.",
@@ -89,7 +87,7 @@ function stripSchemaVerbosity(node: unknown): unknown {
 }
 
 export function demoAgentAvailable(): boolean {
-  return !!process.env.GROQ_API_KEY;
+  return !!process.env.OPENROUTER_API_KEY;
 }
 
 const MAX_LISTED_PATHS = 220;
@@ -101,11 +99,11 @@ export async function runDemoAgent(
   filePaths: string[],
   onEvent: (event: DemoAgentEvent) => void
 ): Promise<void> {
-  const apiKey = process.env.GROQ_API_KEY;
+  const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     onEvent({
       type: "error",
-      error: "GROQ_API_KEY is not set, so CodeBiome's built-in demo agent is unavailable. Connect your own MCP agent instead (see docs/MCP_CLIENTS.md) and ask it to analyze this World.",
+      error: "OPENROUTER_API_KEY is not set, so CodeBiome's built-in demo agent is unavailable. Connect your own MCP agent instead (see docs/MCP_CLIENTS.md) and ask it to analyze this World.",
     });
     return;
   }
@@ -124,7 +122,7 @@ export async function runDemoAgent(
       function: { name: t.name, description: ESSENTIAL_TOOLS[t.name], parameters: stripSchemaVerbosity(t.inputSchema) as Record<string, unknown> },
     }));
 
-  const groq = new Groq({ apiKey });
+  const openrouter = new OpenAI({ apiKey, baseURL: "https://openrouter.ai/api/v1" });
   const model = process.env.DEMO_AGENT_MODEL || DEFAULT_MODEL;
   const maxTurns = Number(process.env.DEMO_AGENT_MAX_TURNS) || DEFAULT_MAX_TURNS;
 
@@ -163,16 +161,16 @@ export async function runDemoAgent(
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
       // Tried forcing the first two calls via tool_choice (a named
-      // function) — reverted: confirmed live that Groq's openai/gpt-oss-120b
-      // does NOT actually constrain generation to the named tool despite
-      // the OpenAI-compatible API surface. It still free-generates whatever
-      // it wants and Groq validates post-hoc, returning a hard 400
+      // function) — reverted: confirmed live that the model does NOT
+      // actually constrain generation to the named tool despite the
+      // OpenAI-compatible API surface. It still free-generates whatever
+      // it wants and the API validates post-hoc, returning a hard 400
       // "tool call validation failed" the moment the model picks something
       // else — worse than not forcing at all (an immediate failure instead
       // of just an inefficient turn). Relying on the prompt + the
       // file-tree-upfront context instead, with the frontend watchdog as
       // the real safety net for when the model still explores too long.
-      const response = await groq.chat.completions.create({
+      const response = await openrouter.chat.completions.create({
         model,
         max_tokens: MAX_OUTPUT_TOKENS,
         messages,
@@ -181,7 +179,7 @@ export async function runDemoAgent(
 
       const message = response.choices[0]?.message;
       if (!message) {
-        onEvent({ type: "error", error: "Groq returned no message." });
+        onEvent({ type: "error", error: "OpenRouter returned no message." });
         return;
       }
 
@@ -210,7 +208,7 @@ export async function runDemoAgent(
           };
           const rawText = result.content.find((c) => c.type === "text")?.text ?? JSON.stringify(result);
           // A single get_file call on a large file could otherwise consume
-          // most of Groq's free-tier 8,000-token/minute budget by itself —
+          // most of the free-tier rate budget by itself —
           // this keeps any one tool result from starving the rest of the run.
           const text = rawText.length > MAX_TOOL_RESULT_CHARS ? `${rawText.slice(0, MAX_TOOL_RESULT_CHARS)}\n…(truncated — result was longer)` : rawText;
           onEvent({ type: "tool_call", tool: call.function.name, args, ok: !result.isError, summary: result.isError ? text : `${call.function.name} succeeded` });

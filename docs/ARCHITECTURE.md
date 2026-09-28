@@ -73,7 +73,7 @@ not fact-finding a capable agent can already do itself.
 | Validation | Zod | Schema-validates the RKM; the actual mechanism (not just convention) behind "an agent can't invent a repository fact" |
 | MCP transport | `@modelcontextprotocol/sdk`, Streamable HTTP (stateless) + a local stdio entry point | Works with any MCP client; stateless HTTP fits serverless, stdio fits clients that spawn a local process |
 | Persistence | Vercel Blob (production) / filesystem or in-memory (local dev) | Small JSON documents, no database needed — see `docs/WORLD_ARCHITECTURE.md` |
-| Built-in demo agent | `groq-sdk` (Groq's free-tier API), an in-process MCP client running a tool-use loop | Keeps the web UI's "paste a URL" flow working without requiring an externally connected agent |
+| Built-in demo agent | `openai` SDK (OpenRouter's free-tier API), an in-process MCP client running a tool-use loop | Keeps the web UI's "paste a URL" flow working without requiring an externally connected agent |
 
 Deliberately **one Next.js application**, not a split frontend/backend —
 module boundaries, not process boundaries, keep concerns separated.

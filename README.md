@@ -68,7 +68,7 @@ If you'd rather not connect your own agent, paste a URL into the web UI:
 CodeBiome's own built-in demo agent (an LLM tool-use loop calling the exact
 same tools any other agent would — see
 [`src/server/demo-agent/`](src/server/demo-agent/)) will explore the repo
-for you, as long as `GROQ_API_KEY` is set. Without it, the World is
+for you, as long as `OPENROUTER_API_KEY` is set. Without it, the World is
 still created with a real file tree — you just need to connect your own
 agent to populate it.
 
@@ -81,7 +81,7 @@ historical writeup (including real Bob 2.0 session transcripts) lives in
 
 ```bash
 npm install
-cp .env.example .env.local   # optional: GITHUB_TOKEN, GROQ_API_KEY, MCP_AUTH_TOKEN
+cp .env.example .env.local   # optional: GITHUB_TOKEN, OPENROUTER_API_KEY, MCP_AUTH_TOKEN
 npm run dev                  # http://localhost:3000
 ```
 
@@ -149,5 +149,5 @@ scripts/
 ## Tech stack
 
 Next.js 14 (App Router) · React 18 · TypeScript · Zod ·
-`@modelcontextprotocol/sdk` · `groq-sdk` (built-in demo agent, free tier) ·
+`@modelcontextprotocol/sdk` · `openai` (built-in demo agent, OpenRouter free tier) ·
 Vitest · Vercel (Hobby tier) + Vercel Blob
