@@ -181,7 +181,7 @@ then hands the freshly created World to CodeBiome's own built-in demo agent
 an LLM tool-use loop against the exact same tools an external agent would
 call — so the "paste a URL and watch it get analyzed" experience still
 exists without requiring a manually-driven external agent. If
-`ANTHROPIC_API_KEY` isn't set, this step is skipped (not a fatal error): the
+`GROQ_API_KEY` isn't set, this step is skipped (not a fatal error): the
 World still exists with a real file tree, and a developer can connect their
 own agent to populate it instead.
 

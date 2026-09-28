@@ -1,4 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
+import Groq from "groq-sdk";
+import type { ChatCompletionMessageParam, ChatCompletionTool } from "groq-sdk/resources/chat/completions";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -16,10 +17,12 @@ import { registerMcpTools } from "@/server/mcp-tools";
  * surface, that's real evidence the tool surface is sufficient for any
  * agent, not just this one.
  *
- * Requires ANTHROPIC_API_KEY. Without it, this is simply unavailable — the
- * web UI falls back to telling the developer to connect their own agent
- * instead (see docs/MCP_CLIENTS.md); CodeBiome does not otherwise make any
- * outbound LLM call.
+ * Uses Groq (free tier, OpenAI-compatible chat-completions API with tool
+ * calling) rather than a paid provider, so the demo works without anyone
+ * needing to fund an API key. Requires GROQ_API_KEY. Without it, this is
+ * simply unavailable — the web UI falls back to telling the developer to
+ * connect their own agent instead (see docs/MCP_CLIENTS.md); CodeBiome does
+ * not otherwise make any outbound LLM call.
  */
 
 export type DemoAgentEvent =
@@ -28,12 +31,12 @@ export type DemoAgentEvent =
   | { type: "done" }
   | { type: "error"; error: string };
 
-const DEFAULT_MODEL = "claude-sonnet-5";
+const DEFAULT_MODEL = "llama-3.3-70b-versatile";
 const DEFAULT_MAX_TURNS = 30;
 const MAX_OUTPUT_TOKENS = 4096;
 
 export function demoAgentAvailable(): boolean {
-  return !!process.env.ANTHROPIC_API_KEY;
+  return !!process.env.GROQ_API_KEY;
 }
 
 export async function runDemoAgent(
@@ -43,11 +46,11 @@ export async function runDemoAgent(
   topLevelEntries: string[],
   onEvent: (event: DemoAgentEvent) => void
 ): Promise<void> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     onEvent({
       type: "error",
-      error: "ANTHROPIC_API_KEY is not set, so CodeBiome's built-in demo agent is unavailable. Connect your own MCP agent instead (see docs/MCP_CLIENTS.md) and ask it to analyze this World.",
+      error: "GROQ_API_KEY is not set, so CodeBiome's built-in demo agent is unavailable. Connect your own MCP agent instead (see docs/MCP_CLIENTS.md) and ask it to analyze this World.",
     });
     return;
   }
@@ -59,11 +62,14 @@ export async function runDemoAgent(
   await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
 
   const { tools: mcpTools } = await client.listTools();
-  const tools = mcpTools
+  const tools: ChatCompletionTool[] = mcpTools
     .filter((t) => t.name !== "analyze_repository")
-    .map((t) => ({ name: t.name, description: t.description ?? "", input_schema: t.inputSchema as Anthropic.Tool["input_schema"] }));
+    .map((t) => ({
+      type: "function",
+      function: { name: t.name, description: t.description ?? "", parameters: t.inputSchema as Record<string, unknown> },
+    }));
 
-  const anthropic = new Anthropic({ apiKey });
+  const groq = new Groq({ apiKey });
   const model = process.env.DEMO_AGENT_MODEL || DEFAULT_MODEL;
   const maxTurns = Number(process.env.DEMO_AGENT_MAX_TURNS) || DEFAULT_MAX_TURNS;
 
@@ -77,46 +83,58 @@ export async function runDemoAgent(
     `going deep on any one flow. When you believe the architecture is reasonably well covered, stop calling tools and reply with a short ` +
     `plain-text summary.`;
 
-  const messages: Anthropic.MessageParam[] = [{ role: "user", content: "Analyze this repository now." }];
+  const messages: ChatCompletionMessageParam[] = [
+    { role: "system", content: system },
+    { role: "user", content: "Analyze this repository now." },
+  ];
 
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
-      const response = await anthropic.messages.create({
+      const response = await groq.chat.completions.create({
         model,
         max_tokens: MAX_OUTPUT_TOKENS,
-        system,
-        tools,
         messages,
+        tools,
       });
 
-      messages.push({ role: "assistant", content: response.content });
+      const message = response.choices[0]?.message;
+      if (!message) {
+        onEvent({ type: "error", error: "Groq returned no message." });
+        return;
+      }
 
-      const toolUses = response.content.filter((block): block is Anthropic.ToolUseBlock => block.type === "tool_use");
-      const textBlocks = response.content.filter((block): block is Anthropic.TextBlock => block.type === "text");
-      for (const t of textBlocks) if (t.text.trim()) onEvent({ type: "message", text: t.text.trim() });
+      messages.push({ role: "assistant", content: message.content ?? null, tool_calls: message.tool_calls });
 
-      if (toolUses.length === 0) {
+      if (message.content?.trim()) onEvent({ type: "message", text: message.content.trim() });
+
+      const toolCalls = message.tool_calls ?? [];
+      if (toolCalls.length === 0) {
         onEvent({ type: "done" });
         return;
       }
 
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
-      for (const use of toolUses) {
+      for (const call of toolCalls) {
+        let args: Record<string, unknown> = {};
         try {
-          const result = (await client.callTool({ name: use.name, arguments: (use.input as Record<string, unknown>) ?? {} })) as {
+          args = JSON.parse(call.function.arguments || "{}");
+        } catch {
+          // Malformed JSON from the model — fed back as a tool error below rather than crashing the loop.
+        }
+
+        try {
+          const result = (await client.callTool({ name: call.function.name, arguments: args })) as {
             content: { type: string; text?: string }[];
             isError?: boolean;
           };
           const text = result.content.find((c) => c.type === "text")?.text ?? JSON.stringify(result);
-          onEvent({ type: "tool_call", tool: use.name, args: use.input, ok: !result.isError, summary: result.isError ? text : `${use.name} succeeded` });
-          toolResults.push({ type: "tool_result", tool_use_id: use.id, content: text, is_error: !!result.isError });
+          onEvent({ type: "tool_call", tool: call.function.name, args, ok: !result.isError, summary: result.isError ? text : `${call.function.name} succeeded` });
+          messages.push({ role: "tool", tool_call_id: call.id, content: text });
         } catch (error) {
-          const message = error instanceof Error ? error.message : "Unknown error";
-          onEvent({ type: "tool_call", tool: use.name, args: use.input, ok: false, summary: message });
-          toolResults.push({ type: "tool_result", tool_use_id: use.id, content: message, is_error: true });
+          const errMessage = error instanceof Error ? error.message : "Unknown error";
+          onEvent({ type: "tool_call", tool: call.function.name, args, ok: false, summary: errMessage });
+          messages.push({ role: "tool", tool_call_id: call.id, content: errMessage });
         }
       }
-      messages.push({ role: "user", content: toolResults });
     }
     onEvent({ type: "done" });
   } catch (error) {

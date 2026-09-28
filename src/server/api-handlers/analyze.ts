@@ -18,7 +18,7 @@ import type { AnalyzeEvent } from "@/types/analyze-events";
  * (still mostly empty) World to CodeBiome's own built-in demo agent, which
  * explores the code and calls the same submit_* tools an externally
  * connected agent would — see src/server/demo-agent/runDemoAgent.ts. If no
- * ANTHROPIC_API_KEY is configured, the demo agent step is skipped (not a
+ * GROQ_API_KEY is configured, the demo agent step is skipped (not a
  * fatal error): the World still exists, still has its real file tree, and a
  * developer can connect their own agent to it instead (docs/MCP_CLIENTS.md).
  *
@@ -72,7 +72,7 @@ export async function handleAnalyze(req: NextRequest): Promise<Response> {
         emit({ type: "result", worldId: world.id, worldUrl: url, fileCount: knowledgeModel.files.length });
 
         if (!demoAgentAvailable()) {
-          emit({ type: "agent_unavailable", reason: "ANTHROPIC_API_KEY is not set — connect your own MCP agent to populate this World (see docs/MCP_CLIENTS.md)." });
+          emit({ type: "agent_unavailable", reason: "GROQ_API_KEY is not set — connect your own MCP agent to populate this World (see docs/MCP_CLIENTS.md)." });
         } else {
           const topLevelEntries = [...new Set(knowledgeModel.files.map((f) => f.path.split("/")[0]))].sort().slice(0, 25);
           await runDemoAgent(world.id, `${owner}/${repo}`, knowledgeModel.files.length, topLevelEntries, (agentEvent) => {
