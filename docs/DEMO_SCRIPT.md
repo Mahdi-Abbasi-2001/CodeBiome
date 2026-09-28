@@ -124,7 +124,7 @@ project URL]*
   connected and calling tools live — see [`docs/MCP_CLIENTS.md`](./MCP_CLIENTS.md)
   for setup. Don't fake the tool-call log; it's meant to be real, same as
   before.
-- **Section 5's built-in agent needs `OPENROUTER_API_KEY` set** on whatever
+- **Section 5's built-in agent needs `GROQ_API_KEY` set** on whatever
   instance you're recording against — verify it's populating a World before
   you start rolling, since a missing key degrades gracefully (a note, not a
   crash) rather than erroring loudly on screen.

@@ -72,7 +72,7 @@ export async function handleAnalyze(req: NextRequest): Promise<Response> {
         emit({ type: "result", worldId: world.id, worldUrl: url, fileCount: knowledgeModel.files.length });
 
         if (!demoAgentAvailable()) {
-          emit({ type: "agent_unavailable", reason: "OPENROUTER_API_KEY is not set — connect your own MCP agent to populate this World (see docs/MCP_CLIENTS.md)." });
+          emit({ type: "agent_unavailable", reason: "GROQ_API_KEY is not set — connect your own MCP agent to populate this World (see docs/MCP_CLIENTS.md)." });
         } else {
           const filePaths = knowledgeModel.files.map((f) => f.path).sort();
           await runDemoAgent(world.id, `${owner}/${repo}`, knowledgeModel.files.length, filePaths, (agentEvent) => {
