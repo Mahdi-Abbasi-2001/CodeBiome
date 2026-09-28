@@ -69,8 +69,6 @@ export async function handleAnalyze(req: NextRequest): Promise<Response> {
 
         const { world, url } = await createWorldFromAnalysis(owner, repo, knowledgeModel);
 
-        emit({ type: "result", worldId: world.id, worldUrl: url, fileCount: knowledgeModel.files.length });
-
         if (!demoAgentAvailable()) {
           emit({ type: "agent_unavailable", reason: "GROQ_API_KEY is not set — connect your own MCP agent to populate this World (see docs/MCP_CLIENTS.md)." });
         } else {
@@ -81,6 +79,11 @@ export async function handleAnalyze(req: NextRequest): Promise<Response> {
             else if (agentEvent.type === "error") emit({ type: "agent_unavailable", reason: agentEvent.error });
           });
         }
+
+        // Emit the result event only AFTER the demo agent has finished, so the
+        // browser doesn't navigate to the world page before the Knowledge Model
+        // has been populated with modules, dependencies, and frameworks.
+        emit({ type: "result", worldId: world.id, worldUrl: url, fileCount: knowledgeModel.files.length });
       } catch (error) {
         emit({ type: "error", error: error instanceof Error ? error.message : "Analysis failed" });
       } finally {
