@@ -214,8 +214,33 @@ export function ScanningView({ repoRef, url, onComplete, onError }: { repoRef: P
       setState((prev) => ({ ...prev, log: [...prev.log.slice(-40), { id: nextLogId.current++, text, tone }] }));
 
     let worldUrl: string | null = null;
+    let settled = false;
+    const settle = (fallbackNote?: string) => {
+      if (settled || !worldUrl) return;
+      settled = true;
+      if (fallbackNote) enqueue(() => setState((prev) => ({ ...prev, agentNote: fallbackNote })));
+      enqueue(() => onComplete(worldUrl!));
+    };
+
+    /**
+     * The agent's own loop can be cut off mid-run (Vercel's function
+     * duration limit, a stalled upstream connection) with no clean
+     * terminal event ever reaching the client — without this, the page
+     * would just hang on "calling …" forever. Once a World exists, any
+     * silence this long means "stop waiting and show what's there" rather
+     * than "still working" — a World with partial data beats a frozen
+     * loading screen.
+     */
+    let lastActivityAt = Date.now();
+    const WATCHDOG_IDLE_MS = 25_000;
+    const watchdog = setInterval(() => {
+      if (worldUrl && !settled && Date.now() - lastActivityAt > WATCHDOG_IDLE_MS) {
+        settle("taking longer than expected — opening what's been found so far…");
+      }
+    }, 2000);
 
     streamAnalyze(url, (event) => {
+      lastActivityAt = Date.now();
       if (event.type === "stage" && event.stage === "fetch") {
         enqueue(() =>
           setState((prev) => ({
@@ -241,31 +266,38 @@ export function ScanningView({ repoRef, url, onComplete, onError }: { repoRef: P
       } else if (event.type === "agent_message") {
         enqueue(() => pushLog(event.text, "info"));
       } else if (event.type === "agent_unavailable") {
-        enqueue(() => {
-          setState((prev) => ({ ...prev, agentStatus: "skipped", agentNote: event.reason }));
-          if (worldUrl) onComplete(worldUrl);
-        });
+        enqueue(() => setState((prev) => ({ ...prev, agentStatus: "skipped", agentNote: event.reason })));
+        settle();
       } else if (event.type === "agent_done") {
-        enqueue(() => {
-          setState((prev) => ({ ...prev, agentStatus: "done", agentNote: "finished" }));
-          if (worldUrl) onComplete(worldUrl);
-        });
+        enqueue(() => setState((prev) => ({ ...prev, agentStatus: "done", agentNote: "finished" })));
+        settle();
       } else if (event.type === "result") {
         worldUrl = event.worldUrl;
         enqueue(() => setState((prev) => ({ ...prev, worldUrl: event.worldUrl })));
       } else if (event.type === "error") {
+        settled = true;
         enqueue(() => {
           setState((prev) => ({ ...prev, error: event.error }));
           onError?.(event.error);
         });
       }
-    }).catch((err) => {
-      const message = err instanceof Error ? err.message : "Analysis failed";
-      enqueue(() => {
-        setState((prev) => ({ ...prev, error: message }));
-        onError?.(message);
+    })
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : "Analysis failed";
+        settled = true;
+        enqueue(() => {
+          setState((prev) => ({ ...prev, error: message }));
+          onError?.(message);
+        });
+      })
+      .finally(() => {
+        // The stream ended (cleanly or not) with no terminal redirect event —
+        // a World exists, so open it rather than leaving the page stuck.
+        settle();
+        clearInterval(watchdog);
       });
-    });
+
+    return () => clearInterval(watchdog);
   }, [url, onComplete, onError]);
 
   const stageWeight = { fetch: 0.15, seed: 0.15 } as const;

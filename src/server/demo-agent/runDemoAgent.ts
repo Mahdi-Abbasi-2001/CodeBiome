@@ -39,7 +39,14 @@ export type DemoAgentEvent =
 // https://console.groq.com/docs/models before changing this, since model
 // availability on Groq's free tier moves faster than this comment can.
 const DEFAULT_MODEL = "openai/gpt-oss-120b";
-const DEFAULT_MAX_TURNS = 15;
+// Vercel Hobby caps this whole request at 60s (src/app/api/bridge/[target]/route.ts's
+// maxDuration) — a hard wall, not something a bigger token/turn budget can
+// buy its way past. Each turn is a real network round trip to Groq (often
+// several seconds on a bigger repo's tool results), so this stays low
+// enough that a typical run has a real chance of finishing in time rather
+// than being killed mid-stream with no clean terminal event. The frontend
+// (ScanningView) also has its own watchdog for when a run doesn't make it.
+const DEFAULT_MAX_TURNS = 8;
 const MAX_OUTPUT_TOKENS = 1024;
 const MAX_TOOL_RESULT_CHARS = 2000;
 
@@ -121,21 +128,23 @@ export async function runDemoAgent(
 
   const system =
     `You are CodeBiome's built-in analysis agent for repository "${repositoryId}" (World id "${worldId}", ${fileCount} files, ` +
-    `top-level entries: ${topLevelEntries.join(", ")}). You have a VERY LIMITED turn budget — work efficiently, not exhaustively.\n\n` +
+    `top-level entries: ${topLevelEntries.join(", ")}). You have AT MOST ${maxTurns} tool calls total, and the whole run is killed at ` +
+    `60 seconds regardless of how many turns you have left — assume you will only get through 4-6 calls in practice. Get the most ` +
+    `valuable data submitted FIRST; anything after that is a bonus, not a guarantee.\n\n` +
     `The Architecture view only shows a module once it has a real detected relationship: a dependency edge to another module, a ` +
     `detected framework, or a linked infrastructure technology (database/cache/queue/external API). A module with none of those stays ` +
-    `invisible even though it exists — so submitting modules alone is NOT enough to produce a useful result. Follow this order:\n` +
-    `1. Call get_repository_overview once to orient yourself.\n` +
-    `2. Call submit_modules ONCE with every module you can identify from paths/overview alone — you rarely need get_file just to name ` +
-    `module boundaries.\n` +
-    `3. Call submit_dependencies EARLY, in the SAME turn if possible, with every real import/call/http-request/db/package relationship ` +
-    `you can infer between those modules (use search_repository and a small number of targeted get_file calls to confirm real edges — ` +
-    `don't read every file). This step is what actually makes Architecture render — do not skip or defer it.\n` +
-    `4. Call submit_frameworks for any technology you can identify (framework name, database, cache, etc.) with real file evidence.\n` +
-    `5. Only if turns remain: submit_entry_points, submit_security_findings, submit_code_health, submit_flow, submit_request_journey.\n\n` +
+    `invisible even though it exists — so submitting modules alone is NOT enough to produce a useful result. In this exact order:\n` +
+    `1. ONE call to get_repository_overview OR search_repository (not both) to orient yourself — don't spend more than one call exploring blind.\n` +
+    `2. ONE call to submit_modules with every module you can identify from paths/overview alone (you rarely need get_file just to name ` +
+    `module boundaries).\n` +
+    `3. ONE call to submit_dependencies, immediately next, with every real relationship you can infer between those modules from what ` +
+    `you already know (path conventions, the overview's framework hints) — a small number of get_file calls to confirm specific real ` +
+    `edges is fine, but do not read files exhaustively. This step is what actually makes Architecture render — never skip or defer it.\n` +
+    `4. If a turn remains: submit_frameworks for any technology you can identify with real file evidence.\n` +
+    `5. Only with turns still remaining: submit_entry_points, submit_security_findings, submit_code_health, submit_flow, submit_request_journey.\n\n` +
     `Every fileId/moduleId you reference must be a REAL path — never invent one. Always pass worldId "${worldId}" explicitly on every ` +
-    `call. Batch generously (many modules/edges in one submit_modules/submit_dependencies call) rather than one tiny call per item — ` +
-    `you do not have turns to spare. When dependencies and frameworks are submitted, stop calling tools and reply with a short summary.`;
+    `call. Batch generously (every module/edge you know about in ONE call) rather than one tiny call per item. Stop calling tools and ` +
+    `reply with a short summary as soon as modules, dependencies, and frameworks are submitted — do not keep exploring for its own sake.`;
 
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: system },
