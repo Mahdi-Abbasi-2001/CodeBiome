@@ -121,13 +121,21 @@ export async function runDemoAgent(
 
   const system =
     `You are CodeBiome's built-in analysis agent for repository "${repositoryId}" (World id "${worldId}", ${fileCount} files, ` +
-    `top-level entries: ${topLevelEntries.join(", ")}).\n\n` +
-    `Explore the real repository using get_file/search_repository/get_repository_overview, then record what you actually find by ` +
-    `calling submit_modules, submit_dependencies, submit_entry_points, submit_frameworks, submit_security_findings, submit_code_health, ` +
-    `submit_flow, and submit_request_journey. Every fileId/moduleId you reference must be a REAL path — never invent one. Always pass ` +
-    `worldId "${worldId}" explicitly on every call. Prioritize covering the whole repository's main modules and their dependencies before ` +
-    `going deep on any one flow. When you believe the architecture is reasonably well covered, stop calling tools and reply with a short ` +
-    `plain-text summary.`;
+    `top-level entries: ${topLevelEntries.join(", ")}). You have a VERY LIMITED turn budget — work efficiently, not exhaustively.\n\n` +
+    `The Architecture view only shows a module once it has a real detected relationship: a dependency edge to another module, a ` +
+    `detected framework, or a linked infrastructure technology (database/cache/queue/external API). A module with none of those stays ` +
+    `invisible even though it exists — so submitting modules alone is NOT enough to produce a useful result. Follow this order:\n` +
+    `1. Call get_repository_overview once to orient yourself.\n` +
+    `2. Call submit_modules ONCE with every module you can identify from paths/overview alone — you rarely need get_file just to name ` +
+    `module boundaries.\n` +
+    `3. Call submit_dependencies EARLY, in the SAME turn if possible, with every real import/call/http-request/db/package relationship ` +
+    `you can infer between those modules (use search_repository and a small number of targeted get_file calls to confirm real edges — ` +
+    `don't read every file). This step is what actually makes Architecture render — do not skip or defer it.\n` +
+    `4. Call submit_frameworks for any technology you can identify (framework name, database, cache, etc.) with real file evidence.\n` +
+    `5. Only if turns remain: submit_entry_points, submit_security_findings, submit_code_health, submit_flow, submit_request_journey.\n\n` +
+    `Every fileId/moduleId you reference must be a REAL path — never invent one. Always pass worldId "${worldId}" explicitly on every ` +
+    `call. Batch generously (many modules/edges in one submit_modules/submit_dependencies call) rather than one tiny call per item — ` +
+    `you do not have turns to spare. When dependencies and frameworks are submitted, stop calling tools and reply with a short summary.`;
 
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: system },

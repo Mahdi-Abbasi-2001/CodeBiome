@@ -79,6 +79,7 @@ export async function handleAnalyze(req: NextRequest): Promise<Response> {
             if (agentEvent.type === "tool_call") emit({ type: "agent_tool_call", tool: agentEvent.tool, ok: agentEvent.ok, summary: agentEvent.summary });
             else if (agentEvent.type === "message") emit({ type: "agent_message", text: agentEvent.text });
             else if (agentEvent.type === "error") emit({ type: "agent_unavailable", reason: agentEvent.error });
+            else if (agentEvent.type === "done") emit({ type: "agent_done" });
           });
         }
       } catch (error) {

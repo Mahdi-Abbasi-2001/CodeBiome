@@ -16,9 +16,11 @@ export type AnalyzeEvent =
   | { type: "agent_tool_call"; tool: string; ok: boolean; summary: string }
   | { type: "agent_message"; text: string }
   | { type: "agent_unavailable"; reason: string }
+  /** The built-in demo agent finished its run (it decided it was done, or hit its turn cap) — the last event the stream emits when an agent ran. */
+  | { type: "agent_done" }
   | {
       type: "result";
-      /** The World this analysis was persisted under (docs/WORLD_ARCHITECTURE.md) — the browser redirects here instead of rendering the world inline. */
+      /** The World this analysis was persisted under (docs/WORLD_ARCHITECTURE.md) — the browser navigates here once the agent (if any) has finished. */
       worldId: string;
       worldUrl: string;
       fileCount: number;
