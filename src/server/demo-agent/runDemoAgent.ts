@@ -162,11 +162,20 @@ export async function runDemoAgent(
 
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
+      // The model doesn't reliably follow "your first two calls must be
+      // submit_modules then submit_dependencies" as a plain instruction
+      // (confirmed live — it kept choosing to explore with get_file first,
+      // burning the turn budget before it ever submitted anything). Force
+      // it structurally instead: Groq's tool_choice makes the first two
+      // turns' tool calls deterministic rather than hoped-for.
+      const forcedTool = turn === 0 ? "submit_modules" : turn === 1 ? "submit_dependencies" : null;
+      const tool_choice = forcedTool ? ({ type: "function", function: { name: forcedTool } } as const) : undefined;
       const response = await groq.chat.completions.create({
         model,
         max_tokens: MAX_OUTPUT_TOKENS,
         messages,
         tools,
+        ...(tool_choice ? { tool_choice } : {}),
       });
 
       const message = response.choices[0]?.message;
