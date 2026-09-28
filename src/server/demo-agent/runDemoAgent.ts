@@ -160,24 +160,38 @@ export async function runDemoAgent(
     { role: "user", content: "Analyze this repository now." },
   ];
 
+  // Force the first two tool calls to be submit_modules and
+  // submit_dependencies — the model otherwise gets distracted by the
+  // file tree and explores with get_file instead of submitting.
+  // If Groq rejects the forced choice (400), retry without it.
+  const FORCED_TOOLS: Record<number, string> = {
+    0: "submit_modules",
+    1: "submit_dependencies",
+  };
+
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
-      // Tried forcing the first two calls via tool_choice (a named
-      // function) — reverted: confirmed live that Groq's openai/gpt-oss-120b
-      // does NOT actually constrain generation to the named tool despite
-      // the OpenAI-compatible API surface. It still free-generates whatever
-      // it wants and Groq validates post-hoc, returning a hard 400
-      // "tool call validation failed" the moment the model picks something
-      // else — worse than not forcing at all (an immediate failure instead
-      // of just an inefficient turn). Relying on the prompt + the
-      // file-tree-upfront context instead, with the frontend watchdog as
-      // the real safety net for when the model still explores too long.
-      const response = await groq.chat.completions.create({
-        model,
-        max_tokens: MAX_OUTPUT_TOKENS,
-        messages,
-        tools,
-      });
+      const forcedTool = FORCED_TOOLS[turn];
+      let response;
+      try {
+        response = await groq.chat.completions.create({
+          model,
+          max_tokens: MAX_OUTPUT_TOKENS,
+          messages,
+          tools,
+          ...(forcedTool ? { tool_choice: { type: "function", function: { name: forcedTool } } } : {}),
+        });
+      } catch (forcedError) {
+        // Groq may reject tool_choice with a 400 if the model doesn't
+        // comply — fall back to letting the model choose freely.
+        if (!forcedTool) throw forcedError;
+        response = await groq.chat.completions.create({
+          model,
+          max_tokens: MAX_OUTPUT_TOKENS,
+          messages,
+          tools,
+        });
+      }
 
       const message = response.choices[0]?.message;
       if (!message) {
