@@ -162,20 +162,21 @@ export async function runDemoAgent(
 
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
-      // The model doesn't reliably follow "your first two calls must be
-      // submit_modules then submit_dependencies" as a plain instruction
-      // (confirmed live — it kept choosing to explore with get_file first,
-      // burning the turn budget before it ever submitted anything). Force
-      // it structurally instead: Groq's tool_choice makes the first two
-      // turns' tool calls deterministic rather than hoped-for.
-      const forcedTool = turn === 0 ? "submit_modules" : turn === 1 ? "submit_dependencies" : null;
-      const tool_choice = forcedTool ? ({ type: "function", function: { name: forcedTool } } as const) : undefined;
+      // Tried forcing the first two calls via tool_choice (a named
+      // function) — reverted: confirmed live that Groq's openai/gpt-oss-120b
+      // does NOT actually constrain generation to the named tool despite
+      // the OpenAI-compatible API surface. It still free-generates whatever
+      // it wants and Groq validates post-hoc, returning a hard 400
+      // "tool call validation failed" the moment the model picks something
+      // else — worse than not forcing at all (an immediate failure instead
+      // of just an inefficient turn). Relying on the prompt + the
+      // file-tree-upfront context instead, with the frontend watchdog as
+      // the real safety net for when the model still explores too long.
       const response = await groq.chat.completions.create({
         model,
         max_tokens: MAX_OUTPUT_TOKENS,
         messages,
         tools,
-        ...(tool_choice ? { tool_choice } : {}),
       });
 
       const message = response.choices[0]?.message;
