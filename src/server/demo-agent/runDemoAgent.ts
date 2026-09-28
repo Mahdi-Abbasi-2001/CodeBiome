@@ -31,7 +31,14 @@ export type DemoAgentEvent =
   | { type: "done" }
   | { type: "error"; error: string };
 
-const DEFAULT_MODEL = "llama-3.3-70b-versatile";
+// Groq gates its most-known Llama models (llama-3.3-70b-versatile,
+// llama-3.1-8b-instant) behind an Enterprise/"contact sales" plan as of
+// this writing — a normal free-tier key gets a 404 "model not found" for
+// them. openai/gpt-oss-120b is a production model open to every account,
+// with real tool-calling support. Verify against
+// https://console.groq.com/docs/models before changing this, since model
+// availability on Groq's free tier moves faster than this comment can.
+const DEFAULT_MODEL = "openai/gpt-oss-120b";
 const DEFAULT_MAX_TURNS = 30;
 const MAX_OUTPUT_TOKENS = 4096;
 
