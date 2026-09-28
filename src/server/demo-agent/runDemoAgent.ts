@@ -92,11 +92,13 @@ export function demoAgentAvailable(): boolean {
   return !!process.env.GROQ_API_KEY;
 }
 
+const MAX_LISTED_PATHS = 220;
+
 export async function runDemoAgent(
   worldId: string,
   repositoryId: string,
   fileCount: number,
-  topLevelEntries: string[],
+  filePaths: string[],
   onEvent: (event: DemoAgentEvent) => void
 ): Promise<void> {
   const apiKey = process.env.GROQ_API_KEY;
@@ -126,25 +128,32 @@ export async function runDemoAgent(
   const model = process.env.DEMO_AGENT_MODEL || DEFAULT_MODEL;
   const maxTurns = Number(process.env.DEMO_AGENT_MAX_TURNS) || DEFAULT_MAX_TURNS;
 
+  const truncatedPaths = filePaths.length > MAX_LISTED_PATHS;
+  const pathListing = filePaths.slice(0, MAX_LISTED_PATHS).join("\n");
+
   const system =
-    `You are CodeBiome's built-in analysis agent for repository "${repositoryId}" (World id "${worldId}", ${fileCount} files, ` +
-    `top-level entries: ${topLevelEntries.join(", ")}). You have AT MOST ${maxTurns} tool calls total, and the whole run is killed at ` +
-    `60 seconds regardless of how many turns you have left — assume you will only get through 4-6 calls in practice. Get the most ` +
-    `valuable data submitted FIRST; anything after that is a bonus, not a guarantee.\n\n` +
+    `You are CodeBiome's built-in analysis agent for repository "${repositoryId}" (${fileCount} files total). You have AT MOST ` +
+    `${maxTurns} tool calls total, and the whole run is killed at 60 seconds regardless of how many turns you have left — assume you ` +
+    `will only get through 4-6 calls in practice. Get the most valuable data submitted FIRST; anything after that is a bonus, not a ` +
+    `guarantee.\n\n` +
+    `Here is the REAL file tree already, for free — you do NOT need get_repository_overview or search_repository just to see what ` +
+    `files exist:\n${pathListing}${truncatedPaths ? `\n…(${filePaths.length - MAX_LISTED_PATHS} more files not shown)` : ""}\n\n` +
     `The Architecture view only shows a module once it has a real detected relationship: a dependency edge to another module, a ` +
     `detected framework, or a linked infrastructure technology (database/cache/queue/external API). A module with none of those stays ` +
     `invisible even though it exists — so submitting modules alone is NOT enough to produce a useful result. In this exact order:\n` +
-    `1. ONE call to get_repository_overview OR search_repository (not both) to orient yourself — don't spend more than one call exploring blind.\n` +
-    `2. ONE call to submit_modules with every module you can identify from paths/overview alone (you rarely need get_file just to name ` +
-    `module boundaries).\n` +
-    `3. ONE call to submit_dependencies, immediately next, with every real relationship you can infer between those modules from what ` +
-    `you already know (path conventions, the overview's framework hints) — a small number of get_file calls to confirm specific real ` +
-    `edges is fine, but do not read files exhaustively. This step is what actually makes Architecture render — never skip or defer it.\n` +
-    `4. If a turn remains: submit_frameworks for any technology you can identify with real file evidence.\n` +
-    `5. Only with turns still remaining: submit_entry_points, submit_security_findings, submit_code_health, submit_flow, submit_request_journey.\n\n` +
-    `Every fileId/moduleId you reference must be a REAL path — never invent one. Always pass worldId "${worldId}" explicitly on every ` +
-    `call. Batch generously (every module/edge you know about in ONE call) rather than one tiny call per item. Stop calling tools and ` +
-    `reply with a short summary as soon as modules, dependencies, and frameworks are submitted — do not keep exploring for its own sake.`;
+    `1. Your FIRST tool call must be submit_modules, using directory/naming conventions in the file list above to group files into ` +
+    `modules — no exploration needed for this step, the paths already tell you the boundaries.\n` +
+    `2. Your SECOND tool call must be submit_dependencies, inferring real relationships from path/naming conventions (e.g. a ` +
+    `"controllers" module calling a "services" module, a "routes"/"router" module depending on handlers, anything depending on a ` +
+    `db/model/repository-named module). A small number of get_file calls to confirm a specific real edge is fine, but do not explore ` +
+    `broadly first — infer from the listing, then verify only what you're unsure of. This step is what actually makes Architecture ` +
+    `render — never skip or defer it.\n` +
+    `3. If a turn remains: submit_frameworks for any technology you can identify from path conventions or a package manifest you spot ` +
+    `in the listing (package.json, requirements.txt, go.mod, etc. — get_file one of these if useful).\n` +
+    `4. Only with turns still remaining: submit_entry_points, submit_security_findings, submit_code_health, submit_flow, submit_request_journey.\n\n` +
+    `Every fileId/moduleId you reference must be a REAL path from the list above — never invent one. Always pass worldId "${worldId}" ` +
+    `explicitly on every call. Batch generously (every module/edge you know about in ONE call) rather than one tiny call per item. Stop ` +
+    `calling tools and reply with a short summary as soon as modules, dependencies, and frameworks are submitted.`;
 
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: system },

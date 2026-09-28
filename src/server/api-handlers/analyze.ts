@@ -74,8 +74,8 @@ export async function handleAnalyze(req: NextRequest): Promise<Response> {
         if (!demoAgentAvailable()) {
           emit({ type: "agent_unavailable", reason: "GROQ_API_KEY is not set — connect your own MCP agent to populate this World (see docs/MCP_CLIENTS.md)." });
         } else {
-          const topLevelEntries = [...new Set(knowledgeModel.files.map((f) => f.path.split("/")[0]))].sort().slice(0, 25);
-          await runDemoAgent(world.id, `${owner}/${repo}`, knowledgeModel.files.length, topLevelEntries, (agentEvent) => {
+          const filePaths = knowledgeModel.files.map((f) => f.path).sort();
+          await runDemoAgent(world.id, `${owner}/${repo}`, knowledgeModel.files.length, filePaths, (agentEvent) => {
             if (agentEvent.type === "tool_call") emit({ type: "agent_tool_call", tool: agentEvent.tool, ok: agentEvent.ok, summary: agentEvent.summary });
             else if (agentEvent.type === "message") emit({ type: "agent_message", text: agentEvent.text });
             else if (agentEvent.type === "error") emit({ type: "agent_unavailable", reason: agentEvent.error });
