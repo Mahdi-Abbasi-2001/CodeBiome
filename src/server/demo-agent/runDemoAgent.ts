@@ -39,6 +39,25 @@ export type DemoAgentEvent =
 // https://console.groq.com/docs/models before changing this, since model
 // availability on Groq's free tier moves faster than this comment can.
 const DEFAULT_MODEL = "openai/gpt-oss-120b";
+const DEMO_AGENT_MODEL_FALLBACKS = [
+  "openai/gpt-oss-120b",
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+];
+
+export function resolveDemoAgentModel(preferred?: string | null): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const candidate of [preferred?.trim(), ...DEMO_AGENT_MODEL_FALLBACKS]) {
+    if (!candidate) continue;
+    const normalized = candidate.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    ordered.push(normalized);
+  }
+  return ordered.length > 0 ? ordered : [DEFAULT_MODEL];
+}
 // Vercel Hobby caps this whole request at 60s (src/app/api/bridge/[target]/route.ts's
 // maxDuration) — a hard wall, not something a bigger token/turn budget can
 // buy its way past. Each turn is a real network round trip to Groq (often
@@ -123,8 +142,36 @@ export async function runDemoAgent(
     }));
 
   const groq = new Groq({ apiKey });
-  const model = process.env.DEMO_AGENT_MODEL || DEFAULT_MODEL;
+  const modelCandidates = resolveDemoAgentModel(process.env.DEMO_AGENT_MODEL || DEFAULT_MODEL);
   const maxTurns = Number(process.env.DEMO_AGENT_MAX_TURNS) || DEFAULT_MAX_TURNS;
+
+  function isModelUnavailableError(error: unknown): boolean {
+    const text = error instanceof Error ? error.message : typeof error === "string" ? error : JSON.stringify(error ?? {});
+    return /model not found|unsupported model|unknown model|invalid model|not available/i.test(text);
+  }
+
+  async function createCompletionWithFallback(args: {
+    messages: ChatCompletionMessageParam[];
+    tools: ChatCompletionTool[];
+    forcedTool?: string;
+  }) {
+    let lastError: unknown;
+    for (const modelName of modelCandidates) {
+      try {
+        return await groq.chat.completions.create({
+          model: modelName,
+          max_tokens: MAX_OUTPUT_TOKENS,
+          messages: args.messages,
+          tools: args.tools,
+          ...(args.forcedTool ? { tool_choice: { type: "function", function: { name: args.forcedTool } } } : {}),
+        });
+      } catch (error) {
+        lastError = error;
+        if (!isModelUnavailableError(error)) throw error;
+      }
+    }
+    throw lastError ?? new Error("No model candidates were available");
+  }
 
   const system =
     `You are CodeBiome's built-in analysis agent for repository "${repositoryId}" (${fileCount} files total). You have AT MOST ` +
@@ -169,23 +216,12 @@ export async function runDemoAgent(
       const forcedTool = FORCED_TOOLS[turn];
       let response;
       try {
-        response = await groq.chat.completions.create({
-          model,
-          max_tokens: MAX_OUTPUT_TOKENS,
-          messages,
-          tools,
-          ...(forcedTool ? { tool_choice: { type: "function", function: { name: forcedTool } } } : {}),
-        });
+        response = await createCompletionWithFallback({ messages, tools, forcedTool });
       } catch (forcedError) {
         // Groq may reject tool_choice with a 400 if the model doesn't
         // comply — fall back to letting the model choose freely.
         if (!forcedTool) throw forcedError;
-        response = await groq.chat.completions.create({
-          model,
-          max_tokens: MAX_OUTPUT_TOKENS,
-          messages,
-          tools,
-        });
+        response = await createCompletionWithFallback({ messages, tools });
       }
 
       const message = response.choices[0]?.message;

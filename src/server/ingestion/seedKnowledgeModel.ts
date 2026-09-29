@@ -50,6 +50,23 @@ const CONFIG_BASENAMES = /(^|\/)(package\.json|package-lock\.json|tsconfig.*\.js
 const ASSET_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "svg", "ico", "webp", "bmp", "mp4", "mov", "avi", "woff", "woff2", "ttf", "eot", "otf"]);
 const CONFIG_EXTENSIONS = new Set(["json", "yml", "yaml", "toml", "ini", "cfg", "conf", "env"]);
 const LARGE_FILE_LOC_THRESHOLD = 300;
+const MAX_CONCURRENT_FILE_READS = 16;
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index], index);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
 
 function extOf(filePath: string): string {
   const base = filePath.split("/").pop() ?? filePath;
@@ -70,29 +87,27 @@ function classifyType(filePath: string): FileFact["type"] {
 }
 
 export async function seedKnowledgeModel(snapshot: RepositorySnapshot): Promise<RepositoryKnowledgeModel> {
-  const files: FileFact[] = await Promise.all(
-    snapshot.files.map(async (f): Promise<FileFact> => {
-      const type = classifyType(f.path);
-      let linesOfCode = 0;
-      if (!f.isBinary) {
-        const content = await f.readContent();
-        if (content) linesOfCode = content.length === 0 ? 0 : content.split("\n").length;
-      }
-      return {
-        id: f.path,
-        path: f.path,
-        type,
-        language: LANGUAGE_BY_EXT[extOf(f.path)] ?? null,
-        sizeBytes: f.sizeBytes,
-        linesOfCode,
-        importance: 0,
-        complexity: null,
-        testStatus: { isTestFile: type === "test", coveredByTests: false, testFileIds: [] },
-        documentationStatus: { hasFileLevelDoc: false, docCommentCoverage: 0 },
-        riskIndicators: [],
-      };
-    })
-  );
+  const files: FileFact[] = await mapWithConcurrency(snapshot.files, MAX_CONCURRENT_FILE_READS, async (f): Promise<FileFact> => {
+    const type = classifyType(f.path);
+    let linesOfCode = 0;
+    if (!f.isBinary) {
+      const content = await f.readContent();
+      if (content) linesOfCode = content.length === 0 ? 0 : content.split("\n").length;
+    }
+    return {
+      id: f.path,
+      path: f.path,
+      type,
+      language: LANGUAGE_BY_EXT[extOf(f.path)] ?? null,
+      sizeBytes: f.sizeBytes,
+      linesOfCode,
+      importance: 0,
+      complexity: null,
+      testStatus: { isTestFile: type === "test", coveredByTests: false, testFileIds: [] },
+      documentationStatus: { hasFileLevelDoc: false, docCommentCoverage: 0 },
+      riskIndicators: [],
+    };
+  });
 
   const bytesByLanguage = new Map<string, number>();
   for (const f of files) if (f.language) bytesByLanguage.set(f.language, (bytesByLanguage.get(f.language) ?? 0) + f.sizeBytes);
