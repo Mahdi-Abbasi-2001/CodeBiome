@@ -106,7 +106,8 @@ export function buildAgentPathGroups(filePaths: string[]) {
 
 function pathPriority(filePath: string): number {
   const basename = filePath.split("/").pop()?.toLowerCase() ?? "";
-  if (/^(api[-_.]|.*\.routes?\.|.*\.controller\.|.*\.model\.)/.test(basename)) return 3;
+  if (/^(api[-_.]|.*\.routes?\.|.*\.controller\.|.*\.model\.)/.test(basename)) return 4;
+  if (/(bidding|checkout|stripe|payment)/.test(basename)) return 3;
   if (/^(index|main|app|server|client|route|router|handler)\./.test(basename)) return 2;
   return 0;
 }
@@ -139,7 +140,7 @@ function frameworkMessages(worldId: string, repositoryId: string, manifestEviden
   return [
     {
       role: "system",
-      content: `Identify technologies declared in these manifests and confirmed by source imports for ${repositoryId}. Evidence values must be exact source file paths, with no line numbers or suffixes, so each technology can attach to a real module. Map React and React Router to frontend, Express to backend, Mongoose or MongoDB clients to database, and payment SDKs such as Stripe to external-api when present. Also detect other clearly declared frameworks or infrastructure. Categories are frontend, backend, database, cache, queue, search, external-api, or fullstack. Include clear frameworks/infrastructure only, not generic utilities. Always pass worldId "${worldId}".\n\nManifests:\n${manifestEvidence}\n\nSource imports:\n${relationshipEvidence}`,
+      content: `Identify technologies declared in these manifests and confirmed by source imports for ${repositoryId}. Evidence values must be exact source file paths, with no line numbers or suffixes, so each technology can attach to a real module. Map React, React Router, Material-UI, React Stripe Elements, and socket.io-client to frontend; Express and server-side Socket.IO to backend; Mongoose or MongoDB clients to database; and Stripe to external-api. Also detect other clearly declared frameworks or infrastructure. Categories are frontend, backend, database, cache, queue, search, external-api, or fullstack. Include clear frameworks/infrastructure only, not generic utilities. Always pass worldId "${worldId}".\n\nManifests:\n${manifestEvidence}\n\nSource imports:\n${relationshipEvidence}`,
     },
     { role: "user", content: "Submit detected frameworks and infrastructure." },
   ];

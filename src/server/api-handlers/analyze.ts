@@ -48,13 +48,15 @@ export async function collectRelationshipEvidence(snapshot: RepositorySnapshot):
       const file = fileByPath.get(filePath);
       if (!file || file.isBinary || file.sizeBytes > 200_000) continue;
       const content = await file.readContent();
+      let fileEvidenceCount = 0;
       for (const [index, line] of content.split("\n").entries()) {
         if (!relevantLine.test(line)) continue;
         const entry = `${file.path}: ${line.trim().slice(0, 240)}`;
         if (totalCharacters + entry.length > 9_000) break;
         groupEvidence.push(entry);
         totalCharacters += entry.length;
-        if (groupEvidence.length >= 4) break;
+        fileEvidenceCount += 1;
+        if (fileEvidenceCount >= 2 || groupEvidence.length >= 4) break;
       }
       if (groupEvidence.length >= 4 || totalCharacters >= 9_000) break;
     }

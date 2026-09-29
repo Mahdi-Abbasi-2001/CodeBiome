@@ -72,6 +72,12 @@ describe("demo-agent repository context", () => {
     const filePaths = [
       ...Array.from({ length: 8 }, (_, index) => `client/auction/${String.fromCharCode(65 + index)}.js`),
       "client/auction/api-auction.js",
+      "client/auction/Bidding.js",
+      ...Array.from({ length: 8 }, (_, index) => `client/cart/${String.fromCharCode(65 + index)}.js`),
+      "client/cart/api-cart.js",
+      "client/cart/Checkout.js",
+      ...Array.from({ length: 8 }, (_, index) => `client/user/${String.fromCharCode(65 + index)}.js`),
+      "client/user/StripeConnect.js",
       "server/routes/auction.routes.js",
       "server/controllers/auction.controller.js",
       "server/models/auction.model.js",
@@ -81,6 +87,9 @@ describe("demo-agent repository context", () => {
     const clientGroup = groups.find((group) => group.path === "client/auction");
 
     expect(clientGroup?.fileIds).toContain("client/auction/api-auction.js");
+    expect(clientGroup?.fileIds).toContain("client/auction/Bidding.js");
+    expect(groups.find((group) => group.path === "client/cart")?.fileIds).toContain("client/cart/Checkout.js");
+    expect(groups.find((group) => group.path === "client/user")?.fileIds).toContain("client/user/StripeConnect.js");
     expect(groups.find((group) => group.path === "server/routes")?.fileIds).toContain("server/routes/auction.routes.js");
     expect(groups.find((group) => group.path === "server/controllers")?.fileIds).toContain("server/controllers/auction.controller.js");
     expect(groups.find((group) => group.path === "server/models")?.fileIds).toContain("server/models/auction.model.js");
