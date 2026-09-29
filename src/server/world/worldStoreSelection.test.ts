@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+const blobs = vi.hoisted(() => new Map<string, string>());
+
 /**
  * Direct regression coverage for the exact bug caught during this project's
  * own Vercel deployment: `vercel storage connect`'s CURRENT default flow
@@ -14,8 +16,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
  * selection happens once, at module load.
  */
 vi.mock("@vercel/blob", () => ({
-  put: vi.fn(async () => ({ url: "https://blob.example/x" })),
-  get: vi.fn(async () => null),
+  put: vi.fn(async (pathname: string, body: string) => {
+    blobs.set(pathname, body);
+    return { url: `https://blob.example/${pathname}` };
+  }),
+  get: vi.fn(async (pathname: string) => {
+    const body = blobs.get(pathname);
+    if (body === undefined) return null;
+    return {
+      stream: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(body));
+          controller.close();
+        },
+      }),
+    };
+  }),
 }));
 
 const ORIGINAL_ENV = { ...process.env };
@@ -30,6 +46,7 @@ describe("worldStore selection (module-load-time)", () => {
   beforeEach(() => {
     delete process.env.BLOB_READ_WRITE_TOKEN;
     delete process.env.BLOB_STORE_ID;
+    blobs.clear();
   });
 
   afterEach(() => {
@@ -83,5 +100,29 @@ describe("worldStore selection (module-load-time)", () => {
     expect(put).not.toHaveBeenCalled();
     // Sanity: it's still a real, working store.
     expect(await store.getLatestWorldIdForRepository("o/r")).toBeTruthy();
+  });
+
+  it("refreshes mutable snapshots and repository indexes across Blob store instances", async () => {
+    process.env.BLOB_STORE_ID = "store_test123";
+    const storeA = await loadWorldStore();
+    const firstWorld = await storeA.createWorld({
+      repositoryUrl: "https://github.com/o/r",
+      repositoryId: "o/r",
+      commitSha: "first",
+      snapshot: { marker: "initial" } as never,
+    });
+    const storeB = await loadWorldStore();
+
+    await expect(storeB.getSnapshot(firstWorld.id)).resolves.toMatchObject({ marker: "initial" });
+    await storeA.updateSnapshot(firstWorld.id, (snapshot) => ({ ...snapshot, marker: "updated" } as typeof snapshot));
+    await expect(storeB.getSnapshot(firstWorld.id)).resolves.toMatchObject({ marker: "updated" });
+
+    const secondWorld = await storeA.createWorld({
+      repositoryUrl: "https://github.com/o/r",
+      repositoryId: "o/r",
+      commitSha: "second",
+      snapshot: {} as never,
+    });
+    await expect(storeB.getLatestWorldIdForRepository("o/r")).resolves.toBe(secondWorld.id);
   });
 });

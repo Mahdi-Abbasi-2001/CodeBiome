@@ -107,8 +107,7 @@ export function buildAgentPathGroups(filePaths: string[]) {
 function pathPriority(filePath: string): number {
   const basename = filePath.split("/").pop()?.toLowerCase() ?? "";
   if (/(bidding|checkout|stripe|payment|user\.controller)/.test(basename)) return 5;
-  if (/^(api[-_.]|.*\.routes?\.|.*\.controller\.|.*\.model\.)/.test(basename)) return 4;
-  if (/(bidding|checkout|stripe|payment)/.test(basename)) return 3;
+  if (/(controller|scheduler|broker|coordinator|manager|storage|database|federation|activitypub|stream|worker|sidekiq|route|router|handler|apiserver|kubelet|replica|alerting|plugin|consumer|producer|websocket)/.test(basename)) return 4;
   if (/^(index|main|app|server|client|route|router|handler)\./.test(basename)) return 2;
   return 0;
 }

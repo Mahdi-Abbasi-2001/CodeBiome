@@ -95,6 +95,21 @@ describe("demo-agent repository context", () => {
     expect(groups.find((group) => group.path === "server/models")?.fileIds).toContain("server/models/auction.model.js");
   });
 
+  it("prioritizes control-plane, broker, and federation files in architecture-heavy repositories", () => {
+    const groups = buildAgentPathGroups([
+      ...Array.from({ length: 8 }, (_, index) => `pkg/controller/file-${index}.go`),
+      "pkg/controller/deployment_controller.go",
+      ...Array.from({ length: 8 }, (_, index) => `core/src/main/scala/kafka/server/File${index}.scala`),
+      "core/src/main/scala/kafka/server/ReplicaManager.scala",
+      ...Array.from({ length: 8 }, (_, index) => `app/lib/activitypub/file_${index}.rb`),
+      "app/lib/activitypub/federation_worker.rb",
+    ]);
+
+    expect(groups.find((group) => group.path === "pkg/controller")?.fileIds).toContain("pkg/controller/deployment_controller.go");
+    expect(groups.find((group) => group.path === "core/src")?.fileIds).toContain("core/src/main/scala/kafka/server/ReplicaManager.scala");
+    expect(groups.find((group) => group.path === "app/lib")?.fileIds).toContain("app/lib/activitypub/federation_worker.rb");
+  });
+
   it("pages every module group, submits evidence-backed dependencies, and detects manifest frameworks", async () => {
     const { world, model } = await seedWorld({
       "client/auction/api-auction.js": "export const list = () => fetch('/api/auctions');\n",

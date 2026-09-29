@@ -40,11 +40,10 @@ import { createWorldId } from "./id";
  * only on `BLOB_READ_WRITE_TOKEN` would silently fall back to in-memory
  * storage in production under this (now-default) connection method.
  *
- * CACHING: a plain in-memory Map sits in front of the Blob-backed
- * implementation, write-through on every mutation and populated on read —
- * this keeps repeated tool calls within one warm instance fast (no network
- * round-trip per call), while still being correct on a cold/different
- * instance (an empty cache just falls through to Blob).
+ * CACHING: immutable World records may be cached within an instance.
+ * Mutable snapshots, state, events, agent runs, and repository indexes are
+ * always read from Blob; another serverless instance can update them without
+ * any way to invalidate this instance's cache.
  */
 
 export class WorldNotFoundError extends Error {
@@ -296,17 +295,8 @@ class FileWorldStore implements WorldStore {
 
 /** Vercel Blob-backed implementation — used in production (and anywhere Blob credentials are configured, via either a static token or OIDC + `BLOB_STORE_ID`). */
 class BlobWorldStore implements WorldStore {
-  // Read-through/write-through cache — same data, just avoids a network
-  // round-trip to Blob for every single tool call within one warm
-  // instance. Never the sole source of truth: a cache miss always falls
-  // through to Blob, which is what makes this correct across instances.
+  // WorldRecord is immutable after creation, so this cache cannot go stale.
   private recordCache = new Map<string, WorldRecord>();
-  private snapshotCache = new Map<string, WorldSnapshot>();
-  private mutableStateCache = new Map<string, WorldMutableState>();
-  private demoAgentRunCache = new Map<string, DemoAgentRunState | null>();
-  private eventsCache = new Map<string, AgentEvent[]>();
-  private repoIndexCache = new Map<string, string>();
-  private mostRecentCache: string | null = null;
 
   private async putJson(pathname: string, data: unknown): Promise<void> {
     // This project's Blob store was provisioned with `--access private`
@@ -350,11 +340,6 @@ class BlobWorldStore implements WorldStore {
     ]);
 
     this.recordCache.set(world.id, world);
-    this.snapshotCache.set(world.id, snapshot);
-    this.mutableStateCache.set(world.id, { ...EMPTY_WORLD_MUTABLE_STATE });
-    this.demoAgentRunCache.set(world.id, null);
-    this.repoIndexCache.set(args.repositoryId, world.id);
-    this.mostRecentCache = world.id;
 
     return world;
   }
@@ -368,11 +353,7 @@ class BlobWorldStore implements WorldStore {
   }
 
   async getSnapshot(worldId: string) {
-    const cached = this.snapshotCache.get(worldId);
-    if (cached) return cached;
-    const snapshot = await this.getJson<WorldSnapshot>(`worlds/${worldId}/snapshot.json`);
-    if (snapshot) this.snapshotCache.set(worldId, snapshot);
-    return snapshot;
+    return this.getJson<WorldSnapshot>(`worlds/${worldId}/snapshot.json`);
   }
 
   async updateSnapshot(worldId: string, updater: (snapshot: WorldSnapshot) => WorldSnapshot) {
@@ -380,31 +361,21 @@ class BlobWorldStore implements WorldStore {
     if (!current) throw new WorldNotFoundError(worldId);
     const next = updater(current);
     await this.putJson(`worlds/${worldId}/snapshot.json`, next);
-    this.snapshotCache.set(worldId, next);
     return next;
   }
 
   async getLatestWorldIdForRepository(repositoryId: string) {
-    const cached = this.repoIndexCache.get(repositoryId);
-    if (cached) return cached;
     const pointer = await this.getJson<{ worldId: string }>(repoIndexKey(repositoryId));
-    if (pointer) this.repoIndexCache.set(repositoryId, pointer.worldId);
     return pointer?.worldId ?? null;
   }
 
   async getMostRecentWorldId() {
-    if (this.mostRecentCache) return this.mostRecentCache;
     const pointer = await this.getJson<{ worldId: string }>(`worlds-index/most-recent.json`);
-    if (pointer) this.mostRecentCache = pointer.worldId;
     return pointer?.worldId ?? null;
   }
 
   async getMutableState(worldId: string) {
-    const cached = this.mutableStateCache.get(worldId);
-    if (cached) return cached;
-    const state = (await this.getJson<WorldMutableState>(`worlds/${worldId}/state.json`)) ?? { ...EMPTY_WORLD_MUTABLE_STATE };
-    this.mutableStateCache.set(worldId, state);
-    return state;
+    return (await this.getJson<WorldMutableState>(`worlds/${worldId}/state.json`)) ?? { ...EMPTY_WORLD_MUTABLE_STATE };
   }
 
   async updateMutableState(worldId: string, updater: (state: WorldMutableState) => WorldMutableState) {
@@ -415,27 +386,20 @@ class BlobWorldStore implements WorldStore {
     const current = await this.getMutableState(worldId);
     const next = updater(current);
     await this.putJson(`worlds/${worldId}/state.json`, next);
-    this.mutableStateCache.set(worldId, next);
     return next;
   }
 
   async getDemoAgentRun(worldId: string) {
-    if (this.demoAgentRunCache.has(worldId)) return this.demoAgentRunCache.get(worldId) ?? null;
-    const run = await this.getJson<DemoAgentRunState | null>(`worlds/${worldId}/agent-run.json`);
-    this.demoAgentRunCache.set(worldId, run);
-    return run;
+    return this.getJson<DemoAgentRunState | null>(`worlds/${worldId}/agent-run.json`);
   }
 
   async setDemoAgentRun(worldId: string, run: DemoAgentRunState | null) {
     await this.putJson(`worlds/${worldId}/agent-run.json`, run);
-    this.demoAgentRunCache.set(worldId, run);
   }
 
   async appendEvent(worldId: string, event: AgentEvent) {
-    const cached = this.eventsCache.get(worldId);
-    const current = cached ?? (await this.getJson<AgentEvent[]>(`worlds/${worldId}/events.json`)) ?? [];
+    const current = (await this.getJson<AgentEvent[]>(`worlds/${worldId}/events.json`)) ?? [];
     const next = [...current, event].slice(-MAX_STORED_EVENTS);
-    this.eventsCache.set(worldId, next);
     // Fire-and-forget from the caller's perspective is tempting, but a
     // dropped write here means the agent's action silently never reaches a
     // browser on a different instance — worth the extra latency to await.
@@ -443,9 +407,7 @@ class BlobWorldStore implements WorldStore {
   }
 
   async getEventsSince(worldId: string, sinceIndex: number) {
-    const cached = this.eventsCache.get(worldId);
-    const events = cached ?? (await this.getJson<AgentEvent[]>(`worlds/${worldId}/events.json`)) ?? [];
-    if (!cached) this.eventsCache.set(worldId, events);
+    const events = (await this.getJson<AgentEvent[]>(`worlds/${worldId}/events.json`)) ?? [];
     return { events: events.slice(sinceIndex), latestIndex: events.length };
   }
 }

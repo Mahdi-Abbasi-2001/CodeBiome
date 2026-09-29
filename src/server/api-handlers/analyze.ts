@@ -9,16 +9,13 @@ import type { DemoAgentDependencyHint } from "@/types/demo-agent";
 import { worldStore } from "@/server/world/worldStore";
 import type { AnalyzeEvent } from "@/types/analyze-events";
 
-async function collectManifestEvidence(snapshot: RepositorySnapshot): Promise<string> {
-  const manifests = snapshot.files
-    .filter((file) => file.path.split("/").at(-1)?.toLowerCase() === "package.json")
-    .sort((a, b) => a.path.split("/").length - b.path.split("/").length || a.path.localeCompare(b.path))
-    .slice(0, 4);
-  const evidence: string[] = [];
+const ARCHITECTURE_MANIFEST = /(^|\/)(package\.json|go\.mod|gemfile|build\.gradle(?:\.kts)?|pom\.xml|cargo\.toml|libs\.versions\.toml|requirements(?:-[^/]*)?\.txt|pyproject\.toml)$/i;
 
-  for (const file of manifests) {
+function dependencyLines(filePath: string, content: string): string[] {
+  const basename = filePath.split("/").at(-1)?.toLowerCase();
+  if (basename === "package.json") {
     try {
-      const manifest = JSON.parse(await file.readContent()) as Record<string, unknown>;
+      const manifest = JSON.parse(content) as Record<string, unknown>;
       const packages = new Set<string>();
       for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
         const dependencies = manifest[field];
@@ -26,9 +23,63 @@ async function collectManifestEvidence(snapshot: RepositorySnapshot): Promise<st
           for (const name of Object.keys(dependencies as Record<string, unknown>)) packages.add(name);
         }
       }
-      if (packages.size > 0) evidence.push(`${file.path}: ${[...packages].sort().slice(0, 100).join(", ")}`);
+      return [...packages].sort().slice(0, 100);
     } catch {
-      // Ignore malformed manifests; the repository still has a real file tree.
+      return [];
+    }
+  }
+
+  const lines = content.split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#") && !line.startsWith("//"));
+  if (basename === "go.mod") {
+    let inRequireBlock = false;
+    return lines.filter((line) => {
+      if (/^require\s*\($/.test(line)) {
+        inRequireBlock = true;
+        return false;
+      }
+      if (inRequireBlock && line === ")") {
+        inRequireBlock = false;
+        return false;
+      }
+      return inRequireBlock || /^require\s+/.test(line);
+    }).slice(0, 100);
+  }
+  if (basename === "gemfile" || basename?.startsWith("requirements")) {
+    return lines.filter((line) => /^(?:gem\s+|[A-Za-z0-9_.-]+(?:\[[^\]]+\])?\s*(?:[<>=!~]|$))/.test(line)).slice(0, 100);
+  }
+  if (basename?.startsWith("build.gradle") || basename === "libs.versions.toml") {
+    return lines.filter((line) => /\b(?:implementation|api|compileOnly|runtimeOnly|testImplementation|testRuntimeOnly|classpath)\b|\b(?:module|group|name)\s*=/.test(line)).slice(0, 100);
+  }
+  if (basename === "pom.xml") {
+    return lines.filter((line) => /<artifactId>[^<]+<\/artifactId>|<groupId>[^<]+<\/groupId>/.test(line)).slice(0, 100);
+  }
+  if (basename === "cargo.toml" || basename === "pyproject.toml") {
+    let inDependencies = false;
+    return lines.filter((line) => {
+      if (/^\[.*dependencies.*\]$/i.test(line)) {
+        inDependencies = true;
+        return true;
+      }
+      if (line.startsWith("[")) inDependencies = false;
+      return inDependencies && /^[A-Za-z0-9_.-]+\s*=/.test(line);
+    }).slice(0, 100);
+  }
+  return [];
+}
+
+export async function collectManifestEvidence(snapshot: RepositorySnapshot): Promise<string> {
+  const manifests = snapshot.files
+    .filter((file) => ARCHITECTURE_MANIFEST.test(file.path))
+    .sort((a, b) => a.path.split("/").length - b.path.split("/").length || a.path.localeCompare(b.path))
+    .slice(0, 8);
+  const evidence: string[] = [];
+
+  for (const file of manifests) {
+    try {
+      const dependencies = dependencyLines(file.path, await file.readContent());
+      if (dependencies.length > 0) evidence.push(`${file.path}: ${dependencies.join(", ")}`);
+    } catch {
+      // One unreadable manifest should not prevent the rest of the repository from being analyzed.
     }
   }
 
@@ -36,7 +87,7 @@ async function collectManifestEvidence(snapshot: RepositorySnapshot): Promise<st
 }
 
 export async function collectRelationshipEvidence(snapshot: RepositorySnapshot): Promise<string> {
-  const relevantLine = /\b(?:import|export|require\s*\(|fetch\s*\(|axios|router\.(?:route|get|post|put|patch|delete)\s*\()/i;
+  const relevantLine = /\b(?:import|export|require\b|use\s+[\w:]+|fetch\s*\(|axios|router\.(?:route|get|post|put|patch|delete)\s*\()/i;
   const fileByPath = new Map(snapshot.files.map((file) => [file.path, file]));
   const groups = buildAgentPathGroups(snapshot.files.map((file) => file.path));
   const evidenceByRoot = new Map<string, string[]>();
@@ -48,9 +99,20 @@ export async function collectRelationshipEvidence(snapshot: RepositorySnapshot):
       const file = fileByPath.get(filePath);
       if (!file || file.isBinary || file.sizeBytes > 200_000) continue;
       const content = await file.readContent();
+      let inImportBlock = false;
       const evidenceLines = content.split("\n")
-        .map((line, index) => ({ line, index }))
-        .filter(({ line }) => relevantLine.test(line))
+        .map((line, index) => {
+          if (/^\s*import\s*\(\s*$/.test(line)) {
+            inImportBlock = true;
+            return { line, index, relevant: false };
+          }
+          if (inImportBlock && /^\s*\)\s*;?\s*$/.test(line)) {
+            inImportBlock = false;
+            return { line, index, relevant: false };
+          }
+          return { line, index, relevant: inImportBlock || relevantLine.test(line) };
+        })
+        .filter(({ relevant }) => relevant)
         .sort((a, b) => evidenceLinePriority(b.line) - evidenceLinePriority(a.line) || a.index - b.index)
         .slice(0, 2);
       for (const { line } of evidenceLines) {
