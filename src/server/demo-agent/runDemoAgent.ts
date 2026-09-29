@@ -259,13 +259,20 @@ export async function runDemoAgentStep(
         // The MCP validator will return a useful error for malformed arguments.
       }
 
-      if (toolName === "submit_dependencies" && call.function.name === toolName && run.dependencyHints.length > 0) {
+      if (toolName === "submit_dependencies" && call.function.name === toolName) {
+        const uniqueDependencies = new Map<string, Record<string, unknown>>();
+        const keyOf = (dependency: Record<string, unknown>) => `${dependency.fromId}->${dependency.toId}:${dependency.relationship}`;
         const dependencies = Array.isArray(args.dependencies) ? args.dependencies as Record<string, unknown>[] : [];
-        const keys = new Set(dependencies.map((dependency) => `${dependency.fromId}->${dependency.toId}:${dependency.relationship}`));
-        args.dependencies = [
-          ...dependencies,
-          ...run.dependencyHints.filter((hint) => !keys.has(`${hint.fromId}->${hint.toId}:${hint.relationship}`)),
-        ];
+        for (const dependency of dependencies) {
+          const key = keyOf(dependency);
+          const existing = uniqueDependencies.get(key);
+          if (!existing || Number(dependency.confidence) > Number(existing.confidence)) uniqueDependencies.set(key, dependency);
+        }
+        for (const hint of run.dependencyHints) {
+          const key = keyOf(hint as unknown as Record<string, unknown>);
+          if (!uniqueDependencies.has(key)) uniqueDependencies.set(key, hint as unknown as Record<string, unknown>);
+        }
+        args.dependencies = [...uniqueDependencies.values()];
       }
 
       try {

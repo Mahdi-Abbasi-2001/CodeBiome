@@ -125,7 +125,10 @@ describe("demo-agent repository context", () => {
       }))
       .mockResolvedValueOnce(toolResponse("dependencies-call", "submit_dependencies", {
         worldId: world.id,
-        dependencies: [{ fromId: "client/auction", toId: "server/routes", fromKind: "module", toKind: "module", relationship: "http-request", confidence: 0.95 }],
+        dependencies: [
+          { fromId: "client/auction", toId: "server/routes", fromKind: "module", toKind: "module", relationship: "http-request", confidence: 0.95 },
+          { fromId: "client/auction", toId: "server/routes", fromKind: "module", toKind: "module", relationship: "http-request", confidence: 0.8 },
+        ],
       }))
       .mockResolvedValueOnce(toolResponse("frameworks-call", "submit_frameworks", {
         worldId: world.id,
@@ -143,7 +146,8 @@ describe("demo-agent repository context", () => {
         model.files.length,
         model.files.map((file) => file.path),
         "package.json: express, mongoose, react",
-        "client/auction/api-auction.js: fetch('/api/auctions')\nserver/routes/route.js: router.route('/api/auctions')"
+        "client/auction/api-auction.js: fetch('/api/auctions')\nserver/routes/route.js: router.route('/api/auctions')",
+        [{ fromId: "client/auction", toId: "server/routes", fromKind: "module", toKind: "module", relationship: "http-request", confidence: 0.98 }]
       );
       const retryStep = await runDemoAgentStep(world.id, state, () => undefined);
       expect(retryStep.run.phase).toBe("modules");
