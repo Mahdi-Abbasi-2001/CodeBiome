@@ -43,7 +43,8 @@ add it later.
 ### Vercel practical constraints (evidence for the calls below)
 
 - **Serverless Functions**: Hobby-tier functions run on the Node.js runtime
-  with a configurable `maxDuration` (we set 60s in `route.ts`); Edge runtime
+  with a configurable `maxDuration` (we set 300s in `route.ts` for the
+  currently observed production ceiling); Edge runtime
   functions cannot be used here because the pipeline needs `/tmp` filesystem
   access and the `tar` package. **Always verify the current numeric limit
   against your live Vercel plan before depending on it for large repos** —

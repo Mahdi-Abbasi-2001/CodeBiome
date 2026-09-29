@@ -144,8 +144,8 @@ tractable.
 
 - The Node.js runtime (`export const runtime = "nodejs"`) is required for
   filesystem/`tar` access during ingestion — the Edge runtime can't do this.
-  `maxDuration` is 60s on the Hobby tier; verify this against your current
-  Vercel plan.
+  `maxDuration` is set to 300s for the current production deployment; verify
+  this against your Vercel plan before depending on it elsewhere.
 - No `git` binary/clone: ingestion downloads a single tarball and extracts
   it into `/tmp`, deleted in a `finally` block once ingestion finishes
   reading from it.

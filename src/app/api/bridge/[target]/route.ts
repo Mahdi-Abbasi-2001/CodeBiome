@@ -45,10 +45,10 @@ import { checkMcpAuth } from "@/server/api-handlers/mcpAuth";
  * for the full investigation.
  */
 export const runtime = "nodejs";
-// Covers one bounded ingestion or agent step. Verify against your current
-// Vercel plan — see docs/ARCHITECTURE_DECISIONS.md §2. Agent turns run in
-// separate requests so the complete tool loop is not capped by one invocation.
-export const maxDuration = 60;
+// Vercel reports a 300-second function timeout for the current production
+// deployment. Keep large-repository tarball extraction inside that budget;
+// agent turns still run in separate requests.
+export const maxDuration = 300;
 
 function notFound(): Response {
   return NextResponse.json({ error: "Not found" }, { status: 404 });
