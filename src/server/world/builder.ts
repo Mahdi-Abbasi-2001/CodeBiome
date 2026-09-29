@@ -169,12 +169,17 @@ export function buildWorldModel(model: RepositoryKnowledgeModel): WorldModel {
 
   const fileToModule = new Map<string, string>();
   for (const m of model.modules) for (const fileId of m.fileIds) fileToModule.set(fileId, m.id);
+  const moduleIds = new Set(model.modules.map((module) => module.id));
+  const moduleForDependencyEntity = (id: string, kind: "file" | "module" | "external-package") => {
+    if (kind === "module") return moduleIds.has(id) ? id : undefined;
+    if (kind === "file") return fileToModule.get(id);
+    return undefined;
+  };
 
   const modulePairs = new Set<string>();
   for (const edge of model.dependencies) {
-    if (edge.fromKind !== "file" || edge.toKind !== "file") continue;
-    const fromModuleId = fileToModule.get(edge.fromId);
-    const toModuleId = fileToModule.get(edge.toId);
+    const fromModuleId = moduleForDependencyEntity(edge.fromId, edge.fromKind);
+    const toModuleId = moduleForDependencyEntity(edge.toId, edge.toKind);
     if (!fromModuleId || !toModuleId || fromModuleId === toModuleId) continue;
     modulePairs.add(`${fromModuleId}->${toModuleId}`);
   }
@@ -185,9 +190,8 @@ export function buildWorldModel(model: RepositoryKnowledgeModel): WorldModel {
   // dimness reflects how much of the underlying evidence is solid.
   const confidenceSumByPair = new Map<string, { sum: number; count: number; edgeId: string }>();
   for (const edge of model.dependencies) {
-    if (edge.fromKind !== "file" || edge.toKind !== "file") continue;
-    const fromModuleId = fileToModule.get(edge.fromId);
-    const toModuleId = fileToModule.get(edge.toId);
+    const fromModuleId = moduleForDependencyEntity(edge.fromId, edge.fromKind);
+    const toModuleId = moduleForDependencyEntity(edge.toId, edge.toKind);
     if (!fromModuleId || !toModuleId || fromModuleId === toModuleId) continue;
 
     const key = `${fromModuleId}->${toModuleId}`;

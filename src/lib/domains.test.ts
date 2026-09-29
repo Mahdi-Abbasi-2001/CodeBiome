@@ -74,6 +74,31 @@ describe("computeDomainBridges", () => {
     expect(bridges[0].weight).toBeGreaterThan(0);
   });
 
+  it("renders module-level dependency submissions as World paths and domain bridges", async () => {
+    const model = await buildTestKnowledgeModel({
+      "src/api/controller.ts": `export const controller = true;\n`,
+      "src/core/service.ts": `export const service = true;\n`,
+    });
+    const apiModule = model.modules.find((module) => module.path === "src/api")!;
+    const coreModule = model.modules.find((module) => module.path === "src/core")!;
+    model.dependencies = [{
+      id: "module-edge",
+      fromId: apiModule.id,
+      toId: coreModule.id,
+      fromKind: "module",
+      toKind: "module",
+      relationship: "calls",
+      direction: "uses",
+      confidence: 0.9,
+    }];
+
+    const world = buildWorldModel(model);
+    const domains = computeDomains(world, model);
+
+    expect(world.paths).toHaveLength(1);
+    expect(computeDomainBridges(domains, model)).toHaveLength(1);
+  });
+
   it("keeps bridges rare — weak, incidental cross-domain references don't each get their own bridge", async () => {
     const files: Record<string, string> = {
       "hub/hub.service.ts": `export class HubService {}\n`,

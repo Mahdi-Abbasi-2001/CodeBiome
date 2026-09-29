@@ -138,9 +138,8 @@ function tallyDomainRelationships(domains: Domain[], knowledgeModel: RepositoryK
 
   const tally = new Map<string, { count: number; confidenceSum: number; forward: boolean; backward: boolean }>();
   for (const edge of knowledgeModel.dependencies) {
-    if (edge.fromKind !== "file" || edge.toKind !== "file") continue;
-    const fromModule = fileToModule.get(edge.fromId);
-    const toModule = fileToModule.get(edge.toId);
+    const fromModule = edge.fromKind === "module" ? edge.fromId : edge.fromKind === "file" ? fileToModule.get(edge.fromId) : undefined;
+    const toModule = edge.toKind === "module" ? edge.toId : edge.toKind === "file" ? fileToModule.get(edge.toId) : undefined;
     if (!fromModule || !toModule) continue;
     const fromDomain = domainByModuleId.get(fromModule);
     const toDomain = domainByModuleId.get(toModule);
