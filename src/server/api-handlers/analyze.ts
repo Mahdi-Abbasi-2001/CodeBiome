@@ -43,18 +43,25 @@ async function collectRelationshipEvidence(snapshot: RepositorySnapshot): Promis
       return priority(a.path) - priority(b.path) || a.path.localeCompare(b.path);
     })
     .slice(0, 96);
-  const evidence: string[] = [];
+  const evidenceByRoot = new Map<string, string[]>();
+  let totalLines = 0;
 
   for (const file of files) {
+    const root = file.path.split("/")[0] || ".";
+    const rootEvidence = evidenceByRoot.get(root) ?? [];
+    if (rootEvidence.length >= 20) continue;
     const content = await file.readContent();
     for (const [index, line] of content.split("\n").entries()) {
       if (!relevantLine.test(line)) continue;
-      evidence.push(`${file.path}:${index + 1}: ${line.trim().slice(0, 240)}`);
-      if (evidence.length >= 40) return evidence.join("\n").slice(0, 9_000);
+      rootEvidence.push(`${file.path}:${index + 1}: ${line.trim().slice(0, 240)}`);
+      totalLines += 1;
+      if (rootEvidence.length >= 20 || totalLines >= 60) break;
     }
+    evidenceByRoot.set(root, rootEvidence);
+    if (totalLines >= 60) break;
   }
 
-  return evidence.join("\n").slice(0, 9_000);
+  return [...evidenceByRoot.values()].flat().join("\n").slice(0, 9_000);
 }
 
 /**

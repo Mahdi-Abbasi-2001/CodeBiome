@@ -128,7 +128,7 @@ function dependencyMessages(worldId: string, repositoryId: string, modules: { id
   return [
     {
       role: "system",
-      content: `Analyze dependencies for ${repositoryId}. Submit only edges supported by the source evidence below; do not infer dependencies from directory names alone. Match import paths and API route strings to the supplied module paths. If evidence is insufficient, submit fewer edges. Always pass worldId "${worldId}".\n\nModules:\n${modules.map((module) => `${module.id}: ${module.name} (${module.path})`).join("\n")}\n\nSource evidence:\n${relationshipEvidence || "No source-level relationship evidence was extracted."}`,
+      content: `Analyze dependencies for ${repositoryId}. Submit only edges supported by the source evidence below; do not infer dependencies from directory names alone. Create an edge for each exact client fetch URL that matches a server route. Also capture explicit route-to-controller and controller-to-model imports. Keep separate modules separate; do not collapse a client subtree into its parent. If evidence is insufficient, submit fewer edges. Always pass worldId "${worldId}".\n\nModules:\n${modules.map((module) => `${module.id}: ${module.name} (${module.path})`).join("\n")}\n\nSource evidence:\n${relationshipEvidence || "No source-level relationship evidence was extracted."}`,
     },
     { role: "user", content: "Submit evidence-backed dependencies between these modules." },
   ];
@@ -138,7 +138,7 @@ function frameworkMessages(worldId: string, repositoryId: string, manifestEviden
   return [
     {
       role: "system",
-      content: `Identify technologies declared in these manifests and confirmed by source imports for ${repositoryId}. Use exact source file paths containing the imports as evidence so each technology can attach to a real module. Categories are frontend, backend, database, cache, queue, search, external-api, or fullstack. Include clear frameworks/infrastructure only, not generic utilities. Always pass worldId "${worldId}".\n\nManifests:\n${manifestEvidence}\n\nSource imports:\n${relationshipEvidence}`,
+      content: `Identify technologies declared in these manifests and confirmed by source imports for ${repositoryId}. Use exact source file paths containing the imports as evidence so each technology can attach to a real module. Map React and React Router to frontend, Express to backend, Mongoose or MongoDB clients to database, and payment SDKs such as Stripe to external-api when present. Also detect other clearly declared frameworks or infrastructure. Categories are frontend, backend, database, cache, queue, search, external-api, or fullstack. Include clear frameworks/infrastructure only, not generic utilities. Always pass worldId "${worldId}".\n\nManifests:\n${manifestEvidence}\n\nSource imports:\n${relationshipEvidence}`,
     },
     { role: "user", content: "Submit detected frameworks and infrastructure." },
   ];
