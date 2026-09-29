@@ -106,6 +106,7 @@ export function buildAgentPathGroups(filePaths: string[]) {
 
 function pathPriority(filePath: string): number {
   const basename = filePath.split("/").pop()?.toLowerCase() ?? "";
+  if (/^(api[-_.]|.*\.routes?\.|.*\.controller\.|.*\.model\.)/.test(basename)) return 3;
   if (/^(index|main|app|server|client|route|router|handler)\./.test(basename)) return 2;
   return 0;
 }

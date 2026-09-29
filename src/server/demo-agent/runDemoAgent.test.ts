@@ -68,6 +68,24 @@ describe("demo-agent repository context", () => {
     expect(run.pathGroups).toHaveLength(2);
   });
 
+  it("prioritizes API and backend boundary files in each representative group", () => {
+    const filePaths = [
+      ...Array.from({ length: 8 }, (_, index) => `client/auction/${String.fromCharCode(65 + index)}.js`),
+      "client/auction/api-auction.js",
+      "server/routes/auction.routes.js",
+      "server/controllers/auction.controller.js",
+      "server/models/auction.model.js",
+    ];
+
+    const groups = buildAgentPathGroups(filePaths);
+    const clientGroup = groups.find((group) => group.path === "client/auction");
+
+    expect(clientGroup?.fileIds).toContain("client/auction/api-auction.js");
+    expect(groups.find((group) => group.path === "server/routes")?.fileIds).toContain("server/routes/auction.routes.js");
+    expect(groups.find((group) => group.path === "server/controllers")?.fileIds).toContain("server/controllers/auction.controller.js");
+    expect(groups.find((group) => group.path === "server/models")?.fileIds).toContain("server/models/auction.model.js");
+  });
+
   it("pages every module group, submits evidence-backed dependencies, and detects manifest frameworks", async () => {
     const { world, model } = await seedWorld({
       "client/auction/api-auction.js": "export const list = () => fetch('/api/auctions');\n",
