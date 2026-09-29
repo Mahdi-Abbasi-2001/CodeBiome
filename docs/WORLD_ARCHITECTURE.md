@@ -177,10 +177,11 @@ all from the World id alone. **No GitHub URL re-entry required.**
 `src/app/page.tsx` (the root `/` page) supports pasting a GitHub URL
 manually. It ingests the repository the same way `analyze_repository` does,
 then hands the freshly created World to CodeBiome's own built-in demo agent
-(`src/server/demo-agent/runDemoAgent.ts`) — an in-process MCP client running
-an LLM tool-use loop against the exact same tools an external agent would
-call — so the "paste a URL and watch it get analyzed" experience still
-exists without requiring a manually-driven external agent. If
+(`src/server/demo-agent/runDemoAgent.ts`) — an in-process MCP client that
+submits modules and dependencies in separate, resumable requests against the
+exact same tools an external agent would call. Its continuation state is
+stored privately with the World, avoiding one serverless-function timeout
+for the complete model loop. If
 `GROQ_API_KEY` isn't set, this step is skipped (not a fatal error): the
 World still exists with a real file tree, and a developer can connect their
 own agent to populate it instead.

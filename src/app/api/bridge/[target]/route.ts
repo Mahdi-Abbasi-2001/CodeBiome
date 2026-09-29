@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { handleMcp } from "@/server/api-handlers/mcp";
 import { handleAnalyze } from "@/server/api-handlers/analyze";
+import { handleDemoAgentStep } from "@/server/api-handlers/demoAgent";
 import { handleSessionContext } from "@/server/api-handlers/sessionContext";
 import { handleAgentEvents } from "@/server/api-handlers/agentEvents";
 import { checkMcpAuth } from "@/server/api-handlers/mcpAuth";
 
 /**
- * The single Vercel Function backing `/api/mcp`, `/api/analyze`,
+ * The single Vercel Function backing `/api/mcp`, `/api/analyze`, `/api/demo-agent`,
  * `/api/session-context`, and `/api/agent-events` — see
  * `docs/VERCEL_DEPLOYMENT.md` for the full writeup of WHY these four must
  * be one function (Vercel isolates by file; these four exist only to
@@ -44,10 +45,9 @@ import { checkMcpAuth } from "@/server/api-handlers/mcpAuth";
  * for the full investigation.
  */
 export const runtime = "nodejs";
-// Covers /api/analyze's worst case (large-repo analysis). Verify against
-// your current Vercel plan — see docs/ARCHITECTURE_DECISIONS.md §2. Note
-// this also caps how long a single /api/agent-events SSE connection stays
-// open before the browser's EventSource must reconnect (see bobEvents.ts).
+// Covers one bounded ingestion or agent step. Verify against your current
+// Vercel plan — see docs/ARCHITECTURE_DECISIONS.md §2. Agent turns run in
+// separate requests so the complete tool loop is not capped by one invocation.
 export const maxDuration = 60;
 
 function notFound(): Response {
@@ -65,6 +65,7 @@ export async function GET(req: NextRequest, { params }: RouteParams): Promise<Re
   if (target === "mcp") return checkMcpAuth(req) ?? handleMcp(req);
   if (target === "agent-events") return handleAgentEvents(req);
   if (target === "analyze" || target === "session-context") return methodNotAllowed();
+  if (target === "demo-agent") return methodNotAllowed();
   return notFound();
 }
 
@@ -72,6 +73,7 @@ export async function POST(req: NextRequest, { params }: RouteParams): Promise<R
   const { target } = params;
   if (target === "mcp") return checkMcpAuth(req) ?? handleMcp(req);
   if (target === "analyze") return handleAnalyze(req);
+  if (target === "demo-agent") return handleDemoAgentStep(req);
   if (target === "session-context") return handleSessionContext(req);
   if (target === "agent-events") return methodNotAllowed();
   return notFound();

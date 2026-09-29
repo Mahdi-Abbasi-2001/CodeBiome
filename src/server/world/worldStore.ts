@@ -5,6 +5,7 @@ import os from "node:os";
 import type { WorldRecord, WorldSnapshot, WorldMutableState } from "@/types/world";
 import { EMPTY_WORLD_MUTABLE_STATE } from "@/types/world";
 import type { AgentEvent } from "@/types/agent-events";
+import type { DemoAgentRunState } from "@/types/demo-agent";
 import { createWorldId } from "./id";
 
 /**
@@ -76,6 +77,8 @@ export interface WorldStore {
   getMostRecentWorldId(): Promise<string | null>;
   getMutableState(worldId: string): Promise<WorldMutableState>;
   updateMutableState(worldId: string, updater: (state: WorldMutableState) => WorldMutableState): Promise<WorldMutableState>;
+  getDemoAgentRun(worldId: string): Promise<DemoAgentRunState | null>;
+  setDemoAgentRun(worldId: string, run: DemoAgentRunState | null): Promise<void>;
   appendEvent(worldId: string, event: AgentEvent): Promise<void>;
   /** Events after `sinceIndex` (exclusive), plus the new highest index — for SSE catch-up across instances. */
   getEventsSince(worldId: string, sinceIndex: number): Promise<{ events: AgentEvent[]; latestIndex: number }>;
@@ -93,6 +96,7 @@ class InMemoryWorldStore implements WorldStore {
   private records = new Map<string, WorldRecord>();
   private snapshots = new Map<string, WorldSnapshot>();
   private mutableState = new Map<string, WorldMutableState>();
+  private demoAgentRuns = new Map<string, DemoAgentRunState | null>();
   private events = new Map<string, AgentEvent[]>();
   private latestByRepository = new Map<string, string>();
   private mostRecentWorldId: string | null = null;
@@ -108,6 +112,7 @@ class InMemoryWorldStore implements WorldStore {
     this.records.set(world.id, world);
     this.snapshots.set(world.id, { world, ...args.snapshot });
     this.mutableState.set(world.id, { ...EMPTY_WORLD_MUTABLE_STATE });
+    this.demoAgentRuns.set(world.id, null);
     this.latestByRepository.set(args.repositoryId, world.id);
     this.mostRecentWorldId = world.id;
     return world;
@@ -145,6 +150,14 @@ class InMemoryWorldStore implements WorldStore {
     const next = updater(this.mutableState.get(worldId) ?? { ...EMPTY_WORLD_MUTABLE_STATE });
     this.mutableState.set(worldId, next);
     return next;
+  }
+
+  async getDemoAgentRun(worldId: string) {
+    return this.demoAgentRuns.get(worldId) ?? null;
+  }
+
+  async setDemoAgentRun(worldId: string, run: DemoAgentRunState | null) {
+    this.demoAgentRuns.set(worldId, run);
   }
 
   async appendEvent(worldId: string, event: AgentEvent) {
@@ -261,6 +274,14 @@ class FileWorldStore implements WorldStore {
     return next;
   }
 
+  async getDemoAgentRun(worldId: string) {
+    return this.getJson<DemoAgentRunState | null>(path.join(this.worldDir(worldId), "agent-run.json"));
+  }
+
+  async setDemoAgentRun(worldId: string, run: DemoAgentRunState | null) {
+    await this.putJson(path.join(this.worldDir(worldId), "agent-run.json"), run);
+  }
+
   async appendEvent(worldId: string, event: AgentEvent) {
     const current = (await this.getJson<AgentEvent[]>(path.join(this.worldDir(worldId), "events.json"))) ?? [];
     const next = [...current, event].slice(-MAX_STORED_EVENTS);
@@ -282,6 +303,7 @@ class BlobWorldStore implements WorldStore {
   private recordCache = new Map<string, WorldRecord>();
   private snapshotCache = new Map<string, WorldSnapshot>();
   private mutableStateCache = new Map<string, WorldMutableState>();
+  private demoAgentRunCache = new Map<string, DemoAgentRunState | null>();
   private eventsCache = new Map<string, AgentEvent[]>();
   private repoIndexCache = new Map<string, string>();
   private mostRecentCache: string | null = null;
@@ -330,6 +352,7 @@ class BlobWorldStore implements WorldStore {
     this.recordCache.set(world.id, world);
     this.snapshotCache.set(world.id, snapshot);
     this.mutableStateCache.set(world.id, { ...EMPTY_WORLD_MUTABLE_STATE });
+    this.demoAgentRunCache.set(world.id, null);
     this.repoIndexCache.set(args.repositoryId, world.id);
     this.mostRecentCache = world.id;
 
@@ -394,6 +417,18 @@ class BlobWorldStore implements WorldStore {
     await this.putJson(`worlds/${worldId}/state.json`, next);
     this.mutableStateCache.set(worldId, next);
     return next;
+  }
+
+  async getDemoAgentRun(worldId: string) {
+    if (this.demoAgentRunCache.has(worldId)) return this.demoAgentRunCache.get(worldId) ?? null;
+    const run = await this.getJson<DemoAgentRunState | null>(`worlds/${worldId}/agent-run.json`);
+    this.demoAgentRunCache.set(worldId, run);
+    return run;
+  }
+
+  async setDemoAgentRun(worldId: string, run: DemoAgentRunState | null) {
+    await this.putJson(`worlds/${worldId}/agent-run.json`, run);
+    this.demoAgentRunCache.set(worldId, run);
   }
 
   async appendEvent(worldId: string, event: AgentEvent) {

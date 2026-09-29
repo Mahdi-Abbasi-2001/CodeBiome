@@ -77,6 +77,11 @@ describe("/api/bridge/[target] (backing /api/mcp, /api/analyze, /api/session-con
       expect(res.status).toBe(405);
     });
 
+    it("accepts demo-agent only as a POST target and validates its world id", async () => {
+      expect((await callGet("demo-agent")).status).toBe(405);
+      expect((await callPost("demo-agent", {})).status).toBe(400);
+    });
+
     it("returns 405 for POST on a GET-only target", async () => {
       const res = await callPost("agent-events");
       expect(res.status).toBe(405);

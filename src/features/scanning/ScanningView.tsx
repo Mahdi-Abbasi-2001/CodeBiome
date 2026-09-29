@@ -265,6 +265,8 @@ export function ScanningView({ repoRef, url, onComplete, onError }: { repoRef: P
         });
       } else if (event.type === "agent_message") {
         enqueue(() => pushLog(event.text, "info"));
+      } else if (event.type === "agent_progress") {
+        enqueue(() => setState((prev) => ({ ...prev, agentStatus: "active" })));
       } else if (event.type === "agent_unavailable") {
         enqueue(() => setState((prev) => ({ ...prev, agentStatus: "skipped", agentNote: event.reason })));
         settle();

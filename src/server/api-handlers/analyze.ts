@@ -3,7 +3,8 @@ import { parseGitHubUrl } from "@/lib/parseGitHubUrl";
 import { buildRepositorySnapshot } from "@/server/ingestion/snapshotBuilder";
 import { seedKnowledgeModel } from "@/server/ingestion/seedKnowledgeModel";
 import { createWorldFromAnalysis } from "@/server/world/createWorldFromAnalysis";
-import { runDemoAgent, demoAgentAvailable } from "@/server/demo-agent/runDemoAgent";
+import { createDemoAgentRunState, demoAgentAvailable } from "@/server/demo-agent/runDemoAgent";
+import { worldStore } from "@/server/world/worldStore";
 import type { AnalyzeEvent } from "@/types/analyze-events";
 
 /**
@@ -68,19 +69,26 @@ export async function handleAnalyze(req: NextRequest): Promise<Response> {
         }
 
         const { world, url } = await createWorldFromAnalysis(owner, repo, knowledgeModel);
+        const agentAvailable = demoAgentAvailable();
+        let agentStateError: string | null = null;
+        if (agentAvailable) {
+          const filePaths = knowledgeModel.files.map((file) => file.path).sort();
+          try {
+            await worldStore.setDemoAgentRun(
+              world.id,
+              createDemoAgentRunState(world.id, `${owner}/${repo}`, knowledgeModel.files.length, filePaths)
+            );
+          } catch (error) {
+            agentStateError = error instanceof Error ? error.message : "Could not save the agent continuation state.";
+          }
+        }
 
         emit({ type: "result", worldId: world.id, worldUrl: url, fileCount: knowledgeModel.files.length });
 
-        if (!demoAgentAvailable()) {
+        if (!agentAvailable) {
           emit({ type: "agent_unavailable", reason: "GROQ_API_KEY is not set — connect your own MCP agent to populate this World (see docs/MCP_CLIENTS.md)." });
-        } else {
-          const filePaths = knowledgeModel.files.map((f) => f.path).sort();
-          await runDemoAgent(world.id, `${owner}/${repo}`, knowledgeModel.files.length, filePaths, (agentEvent) => {
-            if (agentEvent.type === "tool_call") emit({ type: "agent_tool_call", tool: agentEvent.tool, ok: agentEvent.ok, summary: agentEvent.summary });
-            else if (agentEvent.type === "message") emit({ type: "agent_message", text: agentEvent.text });
-            else if (agentEvent.type === "error") emit({ type: "agent_unavailable", reason: agentEvent.error });
-            else if (agentEvent.type === "done") emit({ type: "agent_done" });
-          });
+        } else if (agentStateError) {
+          emit({ type: "agent_unavailable", reason: `Could not start the built-in agent: ${agentStateError}` });
         }
       } catch (error) {
         emit({ type: "error", error: error instanceof Error ? error.message : "Analysis failed" });

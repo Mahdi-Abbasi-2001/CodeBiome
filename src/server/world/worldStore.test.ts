@@ -56,6 +56,23 @@ describe("worldStore", () => {
   it("returns null for a World id that was never created", async () => {
     expect(await worldStore.getWorld("this-id-does-not-exist")).toBeNull();
     expect(await worldStore.getSnapshot("this-id-does-not-exist")).toBeNull();
+    expect(await worldStore.getDemoAgentRun("this-id-does-not-exist")).toBeNull();
+  });
+
+  it("persists private demo-agent continuation state per World", async () => {
+    const snapshot = await buildSnapshotFor({ owner: "ws-agent", repo: "app" });
+    const world = await worldStore.createWorld({
+      repositoryUrl: "https://github.com/ws-agent/app",
+      repositoryId: "ws-agent/app",
+      commitSha: snapshot.knowledgeModel.meta.commitSha,
+      snapshot,
+    });
+    const run = { phase: "dependencies" as const, attempts: 0, messages: [{ role: "user", content: "continue" }] };
+
+    await worldStore.setDemoAgentRun(world.id, run);
+
+    expect(await worldStore.getDemoAgentRun(world.id)).toEqual(run);
+    expect(await worldStore.getMutableState(world.id)).not.toHaveProperty("demoAgentRun");
   });
 
   it("resolves the most recently created World for a repository via getLatestWorldIdForRepository", async () => {

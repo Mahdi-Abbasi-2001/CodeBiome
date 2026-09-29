@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { registerMcpTools } from "@/server/mcp-tools";
+import type { DemoAgentRunState } from "@/types/demo-agent";
 
 /**
  * CodeBiome's own built-in agent — used only so the web UI's "paste a URL"
@@ -58,16 +59,206 @@ export function resolveDemoAgentModel(preferred?: string | null): string[] {
   }
   return ordered.length > 0 ? ordered : [DEFAULT_MODEL];
 }
-// Vercel Hobby caps this whole request at 60s (src/app/api/bridge/[target]/route.ts's
-// maxDuration) — a hard wall, not something a bigger token/turn budget can
-// buy its way past. Each turn is a real network round trip to Groq (often
-// several seconds on a bigger repo's tool results), so this stays low
-// enough that a typical run has a real chance of finishing in time rather
-// than being killed mid-stream with no clean terminal event. The frontend
-// (ScanningView) also has its own watchdog for when a run doesn't make it.
-const DEFAULT_MAX_TURNS = 8;
-const MAX_OUTPUT_TOKENS = 1024;
+
+export function demoAgentAvailable(): boolean {
+  return !!process.env.GROQ_API_KEY;
+}
+
+const MAX_OUTPUT_TOKENS = 2048;
 const MAX_TOOL_RESULT_CHARS = 2000;
+const MAX_PHASE_ATTEMPTS = 2;
+const MAX_INVENTORY_GROUPS = 24;
+const MAX_FILES_PER_GROUP = 3;
+
+const SOURCE_EXTENSIONS = new Set(["c", "cc", "cpp", "cs", "go", "h", "hpp", "java", "js", "jsx", "kt", "mjs", "php", "py", "rb", "rs", "scala", "sh", "swift", "ts", "tsx", "vue"]);
+
+export function buildAgentPathInventory(filePaths: string[]): string {
+  const groups = new Map<string, string[]>();
+  for (const filePath of filePaths) {
+    const parts = filePath.split("/");
+    const basename = parts.at(-1) ?? filePath;
+    const extension = basename.includes(".") ? basename.split(".").pop()!.toLowerCase() : "";
+    if (!SOURCE_EXTENSIONS.has(extension) || /(^|\/)(test|tests|__tests__|spec|e2e|dist|build|coverage)(\/|$)/i.test(filePath)) continue;
+    const directory = parts.length > 2 ? parts.slice(0, 2).join("/") : parts.slice(0, -1).join("/") || ".";
+    const paths = groups.get(directory) ?? [];
+    paths.push(filePath);
+    groups.set(directory, paths);
+  }
+
+  const selectedGroups = [...groups.entries()]
+    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+    .slice(0, MAX_INVENTORY_GROUPS);
+
+  if (selectedGroups.length === 0) return filePaths.slice(0, 60).map((filePath) => `- ${filePath}`).join("\n");
+
+  return selectedGroups
+    .map(([directory, paths]) => {
+      const representativePaths = paths
+        .sort((a, b) => pathPriority(b) - pathPriority(a) || a.localeCompare(b))
+        .slice(0, MAX_FILES_PER_GROUP);
+      return `${directory} (${paths.length} source files)\n${representativePaths.map((filePath) => `  - ${filePath}`).join("\n")}`;
+    })
+    .join("\n");
+}
+
+function pathPriority(filePath: string): number {
+  const basename = filePath.split("/").pop()?.toLowerCase() ?? "";
+  if (/^(index|main|app|server|client|route|router|handler)\./.test(basename)) return 2;
+  return 0;
+}
+
+function buildSystemPrompt(worldId: string, repositoryId: string, fileCount: number, filePaths: string[]): string {
+  return `You are CodeBiome's architecture agent for ${repositoryId} (${fileCount} files). You will make one focused submission per request.\n` +
+    `Use only exact file paths shown in this inventory as fileIds; it is a representative sample, not the full repository.\n` +
+    `For the modules phase, group related paths into at most 12 real modules. Set each module id equal to its path, use exact listed paths in fileIds, and set importance from 0 to 1.\n` +
+    `For the dependencies phase, use only module ids returned by the successful modules submission. Submit only relationships supported by the repository structure; do not invent edges.\n` +
+    `Always pass worldId "${worldId}". If the evidence does not support a relationship, do not fabricate one.\n\n` +
+    `Repository path inventory:\n${buildAgentPathInventory(filePaths)}`;
+}
+
+export function createDemoAgentRunState(worldId: string, repositoryId: string, fileCount: number, filePaths: string[]): DemoAgentRunState {
+  return {
+    phase: "modules",
+    attempts: 0,
+    messages: [
+      { role: "system", content: buildSystemPrompt(worldId, repositoryId, fileCount, filePaths) },
+      { role: "user", content: "Submit the repository's real module boundaries now." },
+    ],
+  };
+}
+
+export interface DemoAgentStepResult {
+  run: DemoAgentRunState;
+  done: boolean;
+}
+
+export async function runDemoAgentStep(
+  worldId: string,
+  run: DemoAgentRunState,
+  onEvent: (event: DemoAgentEvent) => void
+): Promise<DemoAgentStepResult> {
+  if (run.phase === "complete" || run.phase === "failed") return { run, done: true };
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    const error = "GROQ_API_KEY is not set — connect your own MCP agent to populate this World (see docs/MCP_CLIENTS.md).";
+    onEvent({ type: "error", error });
+    return { run: { ...run, phase: "failed", error }, done: true };
+  }
+
+  const server = new McpServer({ name: "codebiome-demo-agent", version: "1.0.0" });
+  registerMcpTools(server, { defaultWorldId: worldId });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "codebiome-demo-agent", version: "1.0.0" });
+  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+
+  try {
+    const { tools: mcpTools } = await client.listTools();
+    const toolName = run.phase === "modules" ? "submit_modules" : "submit_dependencies";
+    const tool = mcpTools.find((candidate) => candidate.name === toolName);
+    if (!tool) throw new Error(`Required MCP tool ${toolName} is unavailable.`);
+    const groqTool: ChatCompletionTool = {
+      type: "function",
+      function: {
+        name: tool.name,
+        description: ESSENTIAL_TOOLS[tool.name],
+        parameters: stripSchemaVerbosity(tool.inputSchema) as Record<string, unknown>,
+      },
+    };
+
+    const groq = new Groq({ apiKey });
+    const modelCandidates = resolveDemoAgentModel(process.env.DEMO_AGENT_MODEL || DEFAULT_MODEL);
+    const messages = run.messages as ChatCompletionMessageParam[];
+    let response;
+    let lastError: unknown;
+    for (const modelName of modelCandidates) {
+      try {
+        response = await groq.chat.completions.create({
+          model: modelName,
+          max_tokens: MAX_OUTPUT_TOKENS,
+          messages,
+          tools: [groqTool],
+          tool_choice: { type: "function", function: { name: toolName } },
+        });
+        break;
+      } catch (error) {
+        lastError = error;
+        const text = error instanceof Error ? error.message : String(error);
+        if (/model not found|unsupported model|unknown model|invalid model|not available/i.test(text)) continue;
+        response = await groq.chat.completions.create({
+          model: modelName,
+          max_tokens: MAX_OUTPUT_TOKENS,
+          messages,
+          tools: [groqTool],
+        });
+        break;
+      }
+    }
+    if (!response) throw lastError ?? new Error("No model candidates were available");
+
+    const message = response.choices[0]?.message;
+    if (!message) throw new Error("Groq returned no message.");
+    messages.push({ role: "assistant", content: message.content ?? null, tool_calls: message.tool_calls });
+    if (message.content?.trim()) onEvent({ type: "message", text: message.content.trim() });
+
+    const toolCalls = message.tool_calls ?? [];
+    if (toolCalls.length === 0) {
+      const error = `The agent did not call ${toolName}.`;
+      onEvent({ type: "error", error });
+      return { run: { ...run, messages, phase: "failed", error }, done: true };
+    }
+
+    let phaseSucceeded = false;
+    for (const call of toolCalls) {
+      let args: Record<string, unknown> = {};
+      try {
+        args = JSON.parse(call.function.arguments || "{}");
+      } catch {
+        // The MCP validator will return a useful error for malformed arguments.
+      }
+
+      try {
+        const result = (await client.callTool({ name: call.function.name, arguments: args })) as {
+          content: { type: string; text?: string }[];
+          isError?: boolean;
+        };
+        const rawText = result.content.find((content) => content.type === "text")?.text ?? JSON.stringify(result);
+        const text = rawText.length > MAX_TOOL_RESULT_CHARS ? `${rawText.slice(0, MAX_TOOL_RESULT_CHARS)}\n…(truncated)` : rawText;
+        onEvent({ type: "tool_call", tool: call.function.name, args, ok: !result.isError, summary: result.isError ? text : `${call.function.name} succeeded` });
+        messages.push({ role: "tool", tool_call_id: call.id, content: text });
+        if (call.function.name === toolName && !result.isError) phaseSucceeded = true;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        onEvent({ type: "tool_call", tool: call.function.name, args, ok: false, summary: errorMessage });
+        messages.push({ role: "tool", tool_call_id: call.id, content: errorMessage });
+      }
+    }
+
+    if (!phaseSucceeded && run.attempts + 1 >= MAX_PHASE_ATTEMPTS) {
+      const error = `${toolName} failed after ${MAX_PHASE_ATTEMPTS} attempts.`;
+      onEvent({ type: "error", error });
+      return { run: { ...run, messages, attempts: run.attempts + 1, phase: "failed", error }, done: true };
+    }
+
+    if (!phaseSucceeded) {
+      return { run: { ...run, messages, attempts: run.attempts + 1 }, done: false };
+    }
+
+    const phase = run.phase === "modules" ? "dependencies" : "complete";
+    const nextRun: DemoAgentRunState = { phase, attempts: 0, messages };
+    if (phase === "complete") {
+      onEvent({ type: "done" });
+      return { run: nextRun, done: true };
+    }
+    nextRun.messages.push({ role: "user", content: "Now submit supported dependencies between the modules you just submitted." });
+    return { run: nextRun, done: false };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Demo agent failed";
+    onEvent({ type: "error", error: message });
+    return { run: { ...run, phase: "failed", error: message }, done: true };
+  } finally {
+    await Promise.allSettled([client.close(), clientTransport.close(), serverTransport.close()]);
+  }
+}
 
 /**
  * Groq's free plan caps every text model at 8,000 tokens/minute — and since
@@ -80,17 +271,8 @@ const MAX_TOOL_RESULT_CHARS = 2000;
  * only what THIS in-process loop sends to Groq is trimmed.
  */
 const ESSENTIAL_TOOLS: Record<string, string> = {
-  get_repository_overview: "Repository metadata: languages, file/module counts, entry points. Call first.",
-  search_repository: "Keyword search over module/file paths.",
-  get_file: "Fetch a file's real source by repository-relative path.",
   submit_modules: "Submit real module boundaries you found: id/name/path/fileIds/importance (importance MUST be a number between 0 and 1, e.g. 0.9 for critical, 0.5 for moderate).",
   submit_dependencies: "Submit real dependency edges: fromId/toId/fromKind/toKind/relationship/confidence (confidence MUST be a number between 0 and 1).",
-  submit_entry_points: "Submit real entry points: type/name/fileId/detectionEvidence.",
-  submit_frameworks: "Submit detected frameworks/technologies: name/category/evidence/confidence.",
-  submit_security_findings: "Submit security findings: patternMatches and/or vulnerableDependencies.",
-  submit_code_health: "Submit code-health signals: todos, dead code, test files, coverage, docs, git history.",
-  submit_flow: "Submit a statically-traced request flow: ordered steps through real files.",
-  submit_request_journey: "Submit a multi-page user journey: ordered steps through real files.",
 };
 
 /** Strips `description`/`title` keys from a JSON-schema tree — the per-field prose that helps a capable agent is pure token overhead for an 8K-TPM budget; type/enum/required constraints (what actually matters for a valid call) are untouched. */
@@ -107,168 +289,3 @@ function stripSchemaVerbosity(node: unknown): unknown {
   return node;
 }
 
-export function demoAgentAvailable(): boolean {
-  return !!process.env.GROQ_API_KEY;
-}
-
-export async function runDemoAgent(
-  worldId: string,
-  repositoryId: string,
-  fileCount: number,
-  filePaths: string[],
-  onEvent: (event: DemoAgentEvent) => void
-): Promise<void> {
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) {
-    onEvent({
-      type: "error",
-      error: "GROQ_API_KEY is not set, so CodeBiome's built-in demo agent is unavailable. Connect your own MCP agent instead (see docs/MCP_CLIENTS.md) and ask it to analyze this World.",
-    });
-    return;
-  }
-
-  const server = new McpServer({ name: "codebiome-demo-agent", version: "1.0.0" });
-  registerMcpTools(server, { defaultWorldId: worldId });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "codebiome-demo-agent", version: "1.0.0" });
-  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
-
-  const { tools: mcpTools } = await client.listTools();
-  const tools: ChatCompletionTool[] = mcpTools
-    .filter((t) => t.name in ESSENTIAL_TOOLS)
-    .map((t) => ({
-      type: "function",
-      function: { name: t.name, description: ESSENTIAL_TOOLS[t.name], parameters: stripSchemaVerbosity(t.inputSchema) as Record<string, unknown> },
-    }));
-
-  const groq = new Groq({ apiKey });
-  const modelCandidates = resolveDemoAgentModel(process.env.DEMO_AGENT_MODEL || DEFAULT_MODEL);
-  const maxTurns = Number(process.env.DEMO_AGENT_MAX_TURNS) || DEFAULT_MAX_TURNS;
-
-  function isModelUnavailableError(error: unknown): boolean {
-    const text = error instanceof Error ? error.message : typeof error === "string" ? error : JSON.stringify(error ?? {});
-    return /model not found|unsupported model|unknown model|invalid model|not available/i.test(text);
-  }
-
-  async function createCompletionWithFallback(args: {
-    messages: ChatCompletionMessageParam[];
-    tools: ChatCompletionTool[];
-    forcedTool?: string;
-  }) {
-    let lastError: unknown;
-    for (const modelName of modelCandidates) {
-      try {
-        return await groq.chat.completions.create({
-          model: modelName,
-          max_tokens: MAX_OUTPUT_TOKENS,
-          messages: args.messages,
-          tools: args.tools,
-          ...(args.forcedTool ? { tool_choice: { type: "function", function: { name: args.forcedTool } } } : {}),
-        });
-      } catch (error) {
-        lastError = error;
-        if (!isModelUnavailableError(error)) throw error;
-      }
-    }
-    throw lastError ?? new Error("No model candidates were available");
-  }
-
-  const system =
-    `You are CodeBiome's built-in analysis agent for repository "${repositoryId}" (${fileCount} files total). You have AT MOST ` +
-    `${maxTurns} tool calls total, and the whole run is killed at 60 seconds regardless of how many turns you have left — assume you ` +
-    `will only get through 4-6 calls in practice. Get the most valuable data submitted FIRST; anything after that is a bonus, not a ` +
-    `guarantee.\n\n` +
-    `The Architecture view only shows a module once it has a real detected relationship: a dependency edge to another module, a ` +
-    `detected framework, or a linked infrastructure technology (database/cache/queue/external API). A module with none of those stays ` +
-    `invisible even though it exists — so submitting modules alone is NOT enough to produce a useful result. In this exact order:\n` +
-    `1. Your FIRST tool call must be get_repository_overview to get the file tree.\n` +
-    `2. Your SECOND tool call must be submit_modules, using the file tree from the previous ` +
-    `call to group files into modules based on directory/naming conventions.\n` +
-    `3. Your THIRD tool call must be submit_dependencies, inferring real relationships from ` +
-    `path/naming conventions (e.g. a "controllers" module calling a "services" module, a ` +
-    `"routes"/"router" module depending on handlers, anything depending on a db/model/repository-named module). ` +
-    `A small number of get_file calls to confirm a specific real edge is fine, but do not explore broadly first — ` +
-    `infer from conventions, then verify only what you're unsure of. This step is what actually makes Architecture ` +
-    `render — never skip or defer it.\n` +
-    `4. If a turn remains: submit_frameworks for any technology you can identify from path conventions ` +
-    `or a package manifest (get_file package.json if useful).\n` +
-    `5. Only with turns still remaining: submit_entry_points, submit_security_findings, submit_code_health, submit_flow, submit_request_journey.\n\n` +
-    `Every fileId/moduleId you reference must be a REAL path — never invent one. Always pass worldId "${worldId}" ` +
-    `explicitly on every call. Batch generously (every module/edge you know about in ONE call) rather than one tiny call per item. Stop ` +
-    `calling tools and reply with a short summary as soon as modules, dependencies, and frameworks are submitted.`;
-
-  const messages: ChatCompletionMessageParam[] = [
-    { role: "system", content: system },
-    { role: "user", content: "Analyze this repository now." },
-  ];
-
-  // Force the first three tool calls: get_repository_overview (to get
-  // the file tree), then submit_modules, then submit_dependencies.
-  // If Groq rejects a forced choice (400), retry without it.
-  const FORCED_TOOLS: Record<number, string> = {
-    0: "get_repository_overview",
-    1: "submit_modules",
-    2: "submit_dependencies",
-  };
-
-  try {
-    for (let turn = 0; turn < maxTurns; turn++) {
-      const forcedTool = FORCED_TOOLS[turn];
-      let response;
-      try {
-        response = await createCompletionWithFallback({ messages, tools, forcedTool });
-      } catch (forcedError) {
-        // Groq may reject tool_choice with a 400 if the model doesn't
-        // comply — fall back to letting the model choose freely.
-        if (!forcedTool) throw forcedError;
-        response = await createCompletionWithFallback({ messages, tools });
-      }
-
-      const message = response.choices[0]?.message;
-      if (!message) {
-        onEvent({ type: "error", error: "Groq returned no message." });
-        return;
-      }
-
-      messages.push({ role: "assistant", content: message.content ?? null, tool_calls: message.tool_calls });
-
-      if (message.content?.trim()) onEvent({ type: "message", text: message.content.trim() });
-
-      const toolCalls = message.tool_calls ?? [];
-      if (toolCalls.length === 0) {
-        onEvent({ type: "done" });
-        return;
-      }
-
-      for (const call of toolCalls) {
-        let args: Record<string, unknown> = {};
-        try {
-          args = JSON.parse(call.function.arguments || "{}");
-        } catch {
-          // Malformed JSON from the model — fed back as a tool error below rather than crashing the loop.
-        }
-
-        try {
-          const result = (await client.callTool({ name: call.function.name, arguments: args })) as {
-            content: { type: string; text?: string }[];
-            isError?: boolean;
-          };
-          const rawText = result.content.find((c) => c.type === "text")?.text ?? JSON.stringify(result);
-          // A single get_file call on a large file could otherwise consume
-          // most of Groq's free-tier 8,000-token/minute budget by itself —
-          // this keeps any one tool result from starving the rest of the run.
-          const text = rawText.length > MAX_TOOL_RESULT_CHARS ? `${rawText.slice(0, MAX_TOOL_RESULT_CHARS)}\n…(truncated — result was longer)` : rawText;
-          onEvent({ type: "tool_call", tool: call.function.name, args, ok: !result.isError, summary: result.isError ? text : `${call.function.name} succeeded` });
-          messages.push({ role: "tool", tool_call_id: call.id, content: text });
-        } catch (error) {
-          const errMessage = error instanceof Error ? error.message : "Unknown error";
-          onEvent({ type: "tool_call", tool: call.function.name, args, ok: false, summary: errMessage });
-          messages.push({ role: "tool", tool_call_id: call.id, content: errMessage });
-        }
-      }
-    }
-    onEvent({ type: "done" });
-  } catch (error) {
-    onEvent({ type: "error", error: error instanceof Error ? error.message : "Demo agent failed" });
-  }
-}

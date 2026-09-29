@@ -15,6 +15,7 @@ export type AnalyzeEvent =
   | { type: "stage"; stage: AnalyzeStage; status: "done"; detail: Record<string, number> }
   | { type: "agent_tool_call"; tool: string; ok: boolean; summary: string }
   | { type: "agent_message"; text: string }
+  | { type: "agent_progress" }
   | { type: "agent_unavailable"; reason: string }
   /** The built-in demo agent finished its run (it decided it was done, or hit its turn cap) — the last event the stream emits when an agent ran. */
   | { type: "agent_done" }

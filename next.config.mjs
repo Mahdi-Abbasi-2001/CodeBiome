@@ -18,7 +18,7 @@ const nextConfig = {
       "/*": [".next/export-detail.json", ".next/export/**/*", ".next/cache/webpack/**/*"],
     },
   },
-  // Maps the four state-sharing API endpoints onto one route family
+  // Maps the state-sharing API endpoints onto one route family
   // (src/app/api/bridge/[target]/route.ts) so they compile to a single
   // Vercel Function — see that file's doc comment and
   // docs/VERCEL_DEPLOYMENT.md. External URLs are unchanged. Uses a PATH
@@ -31,6 +31,7 @@ const nextConfig = {
     return [
       { source: "/api/mcp", destination: "/api/bridge/mcp" },
       { source: "/api/analyze", destination: "/api/bridge/analyze" },
+      { source: "/api/demo-agent", destination: "/api/bridge/demo-agent" },
       { source: "/api/session-context", destination: "/api/bridge/session-context" },
       { source: "/api/agent-events", destination: "/api/bridge/agent-events" },
     ];
