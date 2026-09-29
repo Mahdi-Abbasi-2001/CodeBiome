@@ -6,6 +6,15 @@ export interface DemoAgentPathGroup {
   fileIds: string[];
 }
 
+export interface DemoAgentDependencyHint {
+  fromId: string;
+  toId: string;
+  fromKind: "module";
+  toKind: "module";
+  relationship: "http-request";
+  confidence: number;
+}
+
 export interface DemoAgentRunState {
   phase: DemoAgentPhase;
   attempts: number;
@@ -13,6 +22,7 @@ export interface DemoAgentRunState {
   pathGroups: DemoAgentPathGroup[];
   manifestEvidence: string;
   relationshipEvidence: string;
+  dependencyHints: DemoAgentDependencyHint[];
   messages: unknown[];
   error?: string;
 }

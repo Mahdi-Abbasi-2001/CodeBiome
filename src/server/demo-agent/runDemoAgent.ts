@@ -5,7 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { registerMcpTools } from "@/server/mcp-tools";
 import { worldStore } from "@/server/world/worldStore";
-import type { DemoAgentRunState } from "@/types/demo-agent";
+import type { DemoAgentDependencyHint, DemoAgentRunState } from "@/types/demo-agent";
 
 /**
  * CodeBiome's own built-in agent — used only so the web UI's "paste a URL"
@@ -145,7 +145,15 @@ function frameworkMessages(worldId: string, repositoryId: string, manifestEviden
   ];
 }
 
-export function createDemoAgentRunState(worldId: string, repositoryId: string, fileCount: number, filePaths: string[], manifestEvidence = "", relationshipEvidence = ""): DemoAgentRunState {
+export function createDemoAgentRunState(
+  worldId: string,
+  repositoryId: string,
+  fileCount: number,
+  filePaths: string[],
+  manifestEvidence = "",
+  relationshipEvidence = "",
+  dependencyHints: DemoAgentDependencyHint[] = []
+): DemoAgentRunState {
   const pathGroups = buildAgentPathGroups(filePaths);
   return {
     phase: "modules",
@@ -154,6 +162,7 @@ export function createDemoAgentRunState(worldId: string, repositoryId: string, f
     pathGroups,
     manifestEvidence,
     relationshipEvidence,
+    dependencyHints,
     messages: moduleBatchMessages(worldId, repositoryId, fileCount, pathGroups, 0),
   };
 }
@@ -246,6 +255,15 @@ export async function runDemoAgentStep(
         args = JSON.parse(call.function.arguments || "{}");
       } catch {
         // The MCP validator will return a useful error for malformed arguments.
+      }
+
+      if (toolName === "submit_dependencies" && call.function.name === toolName && run.dependencyHints.length > 0) {
+        const dependencies = Array.isArray(args.dependencies) ? args.dependencies as Record<string, unknown>[] : [];
+        const keys = new Set(dependencies.map((dependency) => `${dependency.fromId}->${dependency.toId}:${dependency.relationship}`));
+        args.dependencies = [
+          ...dependencies,
+          ...run.dependencyHints.filter((hint) => !keys.has(`${hint.fromId}->${hint.toId}:${hint.relationship}`)),
+        ];
       }
 
       try {

@@ -67,7 +67,7 @@ describe("worldStore", () => {
       commitSha: snapshot.knowledgeModel.meta.commitSha,
       snapshot,
     });
-    const run = { phase: "dependencies" as const, attempts: 0, moduleGroupIndex: 0, pathGroups: [], manifestEvidence: "", relationshipEvidence: "", messages: [{ role: "user", content: "continue" }] };
+    const run = { phase: "dependencies" as const, attempts: 0, moduleGroupIndex: 0, pathGroups: [], manifestEvidence: "", relationshipEvidence: "", dependencyHints: [], messages: [{ role: "user", content: "continue" }] };
 
     await worldStore.setDemoAgentRun(world.id, run);
 

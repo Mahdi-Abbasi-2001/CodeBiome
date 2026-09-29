@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RepositorySnapshot } from "@/server/ingestion/types";
-import { collectRelationshipEvidence } from "./analyze";
+import { collectHttpDependencyHints, collectRelationshipEvidence } from "./analyze";
 
 describe("collectRelationshipEvidence", () => {
   it("keeps source evidence from client, route, controller, and model modules", async () => {
@@ -34,5 +34,15 @@ describe("collectRelationshipEvidence", () => {
     expect(evidence).toContain("server/routes/auction.routes.js: router.route('/api/auctions')");
     expect(evidence).toContain("server/controllers/auction.controller.js: import Auction");
     expect(evidence).toContain("server/models/auction.model.js: import mongoose");
+
+    const hints = await collectHttpDependencyHints(snapshot);
+    expect(hints).toContainEqual({
+      fromId: "client/auction",
+      toId: "server/routes",
+      fromKind: "module",
+      toKind: "module",
+      relationship: "http-request",
+      confidence: 0.98,
+    });
   });
 });

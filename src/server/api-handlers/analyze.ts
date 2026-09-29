@@ -5,6 +5,7 @@ import type { RepositorySnapshot } from "@/server/ingestion/types";
 import { seedKnowledgeModel } from "@/server/ingestion/seedKnowledgeModel";
 import { createWorldFromAnalysis } from "@/server/world/createWorldFromAnalysis";
 import { buildAgentPathGroups, createDemoAgentRunState, demoAgentAvailable } from "@/server/demo-agent/runDemoAgent";
+import type { DemoAgentDependencyHint } from "@/types/demo-agent";
 import { worldStore } from "@/server/world/worldStore";
 import type { AnalyzeEvent } from "@/types/analyze-events";
 
@@ -64,6 +65,41 @@ export async function collectRelationshipEvidence(snapshot: RepositorySnapshot):
   return [...evidenceByRoot.values()].flat().join("\n").slice(0, 9_000);
 }
 
+export async function collectHttpDependencyHints(snapshot: RepositorySnapshot): Promise<DemoAgentDependencyHint[]> {
+  const routePattern = /router\.(?:route\s*\(\s*|get\s*\(|post\s*\(|put\s*\(|patch\s*\(|delete\s*\()['"`]([^'"`]+)['"`]/g;
+  const fetchPattern = /fetch\s*\(\s*['"`]([^'"`]+)['"`]/g;
+  const routeEntries: { path: string; moduleId: string }[] = [];
+
+  for (const file of snapshot.files.filter((candidate) => /(^|\/)server\/routes\//.test(candidate.path) && !candidate.isBinary)) {
+    const content = await file.readContent();
+    const moduleId = file.path.split("/").slice(0, 2).join("/");
+    for (const match of content.matchAll(routePattern)) routeEntries.push({ path: match[1].replace(/\/$/, ""), moduleId });
+  }
+
+  const hints = new Map<string, DemoAgentDependencyHint>();
+  for (const file of snapshot.files.filter((candidate) => /(^|\/)client\/.*\/api[^/]*\.[cm]?[jt]sx?$/i.test(candidate.path) && !candidate.isBinary)) {
+    const content = await file.readContent();
+    const fromId = file.path.split("/").slice(0, 2).join("/");
+    for (const match of content.matchAll(fetchPattern)) {
+      const requestPath = match[1].replace(/\/$/, "");
+      for (const route of routeEntries) {
+        if (route.path !== requestPath) continue;
+        const key = `${fromId}->${route.moduleId}`;
+        hints.set(key, {
+          fromId,
+          toId: route.moduleId,
+          fromKind: "module",
+          toKind: "module",
+          relationship: "http-request",
+          confidence: 0.98,
+        });
+      }
+    }
+  }
+
+  return [...hints.values()];
+}
+
 /**
  * The browser-first entry point (docs/WORLD_ARCHITECTURE.md "Browser-first
  * fallback") — manual "paste a GitHub URL" flow. Streams newline-delimited
@@ -119,11 +155,13 @@ export async function handleAnalyze(req: NextRequest): Promise<Response> {
         let knowledgeModel;
         let manifestEvidence = "";
         let relationshipEvidence = "";
+        let dependencyHints: DemoAgentDependencyHint[] = [];
         try {
           emit({ type: "stage", stage: "seed", status: "start" });
           knowledgeModel = await seedKnowledgeModel(snapshot);
           manifestEvidence = await collectManifestEvidence(snapshot);
           relationshipEvidence = await collectRelationshipEvidence(snapshot);
+          dependencyHints = await collectHttpDependencyHints(snapshot);
           emit({ type: "stage", stage: "seed", status: "done", detail: { fileCount: knowledgeModel.files.length } });
         } finally {
           await cleanup();
@@ -137,7 +175,7 @@ export async function handleAnalyze(req: NextRequest): Promise<Response> {
           try {
             await worldStore.setDemoAgentRun(
               world.id,
-              createDemoAgentRunState(world.id, `${owner}/${repo}`, knowledgeModel.files.length, filePaths, manifestEvidence, relationshipEvidence)
+              createDemoAgentRunState(world.id, `${owner}/${repo}`, knowledgeModel.files.length, filePaths, manifestEvidence, relationshipEvidence, dependencyHints)
             );
           } catch (error) {
             agentStateError = error instanceof Error ? error.message : "Could not save the agent continuation state.";
