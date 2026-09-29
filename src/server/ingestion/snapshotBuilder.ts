@@ -58,6 +58,21 @@ const BINARY_EXTENSIONS = new Set([
 // pathological giant file (a committed bundle, a data dump) into memory,
 // which is an unrelated concern from how many files the repo has.
 const MAX_READABLE_BYTES = 200_000;
+const MAX_CONCURRENT_FILE_STATS = 32;
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
 
 export interface SnapshotBuildResult {
   snapshot: RepositorySnapshot;
@@ -90,10 +105,12 @@ export async function buildRepositorySnapshot(
   const files: SnapshotFile[] = [];
 
   const queue: { dir: string; relativeBase: string }[] = [{ dir: extractDir, relativeBase: "" }];
+  let nextDirectoryIndex = 0;
 
-  while (queue.length > 0) {
-    const { dir, relativeBase } = queue.shift()!;
+  while (nextDirectoryIndex < queue.length) {
+    const { dir, relativeBase } = queue[nextDirectoryIndex++];
     const entries = await readdir(dir, { withFileTypes: true });
+    const fileEntries = [];
 
     for (const entry of entries) {
       if (entry.isDirectory()) {
@@ -110,21 +127,27 @@ export async function buildRepositorySnapshot(
       // part of the repository's real content — not a file this analysis
       // can honestly represent either way, so it's skipped, not followed.
       if (entry.isSymbolicLink() || !entry.isFile()) continue;
+      fileEntries.push(entry);
+    }
 
+    const fileMetadata = await mapWithConcurrency(fileEntries, MAX_CONCURRENT_FILE_STATS, async (entry) => {
       const absolutePath = path.join(dir, entry.name);
       const relativePath = path.posix.join(relativeBase, entry.name);
       const ext = entry.name.includes(".") ? entry.name.split(".").pop()!.toLowerCase() : "";
       const isBinary = BINARY_EXTENSIONS.has(ext);
-      let fileStat;
       try {
-        fileStat = await stat(absolutePath);
+        const fileStat = await stat(absolutePath);
+        return { absolutePath, relativePath, isBinary, sizeBytes: fileStat.size };
       } catch {
         // Broken symlink, a file removed mid-walk, a permissions quirk in
         // the extracted tarball — none of these should abort analysis of
         // the other 599 files. Skip this one file instead.
-        continue;
+        return null;
       }
+    });
 
+    for (const metadata of fileMetadata) {
+      if (!metadata) continue;
       // Memoized: structure-analyzer reads every source/test/doc/config
       // file for line counts, and then whichever single language-specific
       // dependency analyzer matches this file reads it again for its import
@@ -135,13 +158,13 @@ export async function buildRepositorySnapshot(
       let contentPromise: Promise<string> | null = null;
 
       files.push({
-        path: relativePath,
-        absolutePath,
-        sizeBytes: fileStat.size,
-        isBinary,
+        path: metadata.relativePath,
+        absolutePath: metadata.absolutePath,
+        sizeBytes: metadata.sizeBytes,
+        isBinary: metadata.isBinary,
         readContent: () => {
-          if (isBinary || fileStat.size > MAX_READABLE_BYTES) return Promise.resolve("");
-          if (!contentPromise) contentPromise = readFile(absolutePath, "utf8");
+          if (metadata.isBinary || metadata.sizeBytes > MAX_READABLE_BYTES) return Promise.resolve("");
+          if (!contentPromise) contentPromise = readFile(metadata.absolutePath, "utf8");
           return contentPromise;
         },
       });
