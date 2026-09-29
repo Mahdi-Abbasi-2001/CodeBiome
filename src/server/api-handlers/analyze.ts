@@ -1,11 +1,61 @@
 import { NextRequest } from "next/server";
 import { parseGitHubUrl } from "@/lib/parseGitHubUrl";
 import { buildRepositorySnapshot } from "@/server/ingestion/snapshotBuilder";
+import type { RepositorySnapshot } from "@/server/ingestion/types";
 import { seedKnowledgeModel } from "@/server/ingestion/seedKnowledgeModel";
 import { createWorldFromAnalysis } from "@/server/world/createWorldFromAnalysis";
 import { createDemoAgentRunState, demoAgentAvailable } from "@/server/demo-agent/runDemoAgent";
 import { worldStore } from "@/server/world/worldStore";
 import type { AnalyzeEvent } from "@/types/analyze-events";
+
+async function collectManifestEvidence(snapshot: RepositorySnapshot): Promise<string> {
+  const manifests = snapshot.files
+    .filter((file) => file.path.split("/").at(-1)?.toLowerCase() === "package.json")
+    .sort((a, b) => a.path.split("/").length - b.path.split("/").length || a.path.localeCompare(b.path))
+    .slice(0, 4);
+  const evidence: string[] = [];
+
+  for (const file of manifests) {
+    try {
+      const manifest = JSON.parse(await file.readContent()) as Record<string, unknown>;
+      const packages = new Set<string>();
+      for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
+        const dependencies = manifest[field];
+        if (dependencies && typeof dependencies === "object" && !Array.isArray(dependencies)) {
+          for (const name of Object.keys(dependencies as Record<string, unknown>)) packages.add(name);
+        }
+      }
+      if (packages.size > 0) evidence.push(`${file.path}: ${[...packages].sort().slice(0, 100).join(", ")}`);
+    } catch {
+      // Ignore malformed manifests; the repository still has a real file tree.
+    }
+  }
+
+  return evidence.join("\n").slice(0, 10_000);
+}
+
+async function collectRelationshipEvidence(snapshot: RepositorySnapshot): Promise<string> {
+  const relevantLine = /\b(?:import|export|require\s*\(|fetch\s*\(|axios|router\.(?:route|get|post|put|patch|delete)\s*\()/i;
+  const files = snapshot.files
+    .filter((file) => !file.isBinary && file.sizeBytes <= 200_000 && /\.(?:[cm]?js|jsx|tsx?|vue|py|go|rs)$/i.test(file.path))
+    .sort((a, b) => {
+      const priority = (filePath: string) => /(?:api|route|controller|service|model|server)/i.test(filePath) ? 0 : 1;
+      return priority(a.path) - priority(b.path) || a.path.localeCompare(b.path);
+    })
+    .slice(0, 96);
+  const evidence: string[] = [];
+
+  for (const file of files) {
+    const content = await file.readContent();
+    for (const [index, line] of content.split("\n").entries()) {
+      if (!relevantLine.test(line)) continue;
+      evidence.push(`${file.path}:${index + 1}: ${line.trim().slice(0, 240)}`);
+      if (evidence.length >= 60) return evidence.join("\n").slice(0, 12_000);
+    }
+  }
+
+  return evidence.join("\n").slice(0, 12_000);
+}
 
 /**
  * The browser-first entry point (docs/WORLD_ARCHITECTURE.md "Browser-first
@@ -60,9 +110,13 @@ export async function handleAnalyze(req: NextRequest): Promise<Response> {
         emit({ type: "stage", stage: "fetch", status: "done", detail: { fileCount: snapshot.files.length } });
 
         let knowledgeModel;
+        let manifestEvidence = "";
+        let relationshipEvidence = "";
         try {
           emit({ type: "stage", stage: "seed", status: "start" });
           knowledgeModel = await seedKnowledgeModel(snapshot);
+          manifestEvidence = await collectManifestEvidence(snapshot);
+          relationshipEvidence = await collectRelationshipEvidence(snapshot);
           emit({ type: "stage", stage: "seed", status: "done", detail: { fileCount: knowledgeModel.files.length } });
         } finally {
           await cleanup();
@@ -76,7 +130,7 @@ export async function handleAnalyze(req: NextRequest): Promise<Response> {
           try {
             await worldStore.setDemoAgentRun(
               world.id,
-              createDemoAgentRunState(world.id, `${owner}/${repo}`, knowledgeModel.files.length, filePaths)
+              createDemoAgentRunState(world.id, `${owner}/${repo}`, knowledgeModel.files.length, filePaths, manifestEvidence, relationshipEvidence)
             );
           } catch (error) {
             agentStateError = error instanceof Error ? error.message : "Could not save the agent continuation state.";

@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { registerMcpTools } from "@/server/mcp-tools";
+import { worldStore } from "@/server/world/worldStore";
 import type { DemoAgentRunState } from "@/types/demo-agent";
 
 /**
@@ -67,14 +68,19 @@ export function demoAgentAvailable(): boolean {
 const MAX_OUTPUT_TOKENS = 2048;
 const MAX_TOOL_RESULT_CHARS = 2000;
 const MAX_PHASE_ATTEMPTS = 2;
-const MAX_INVENTORY_GROUPS = 16;
-const MAX_FILES_PER_GROUP = 2;
-const MAX_MODULES_PER_SUBMISSION = 8;
-const MAX_FILES_PER_MODULE = 2;
+const MAX_INVENTORY_GROUPS = 32;
+const MODULE_GROUPS_PER_BATCH = 4;
+const MAX_FILES_PER_GROUP = 8;
 
 const SOURCE_EXTENSIONS = new Set(["c", "cc", "cpp", "cs", "go", "h", "hpp", "java", "js", "jsx", "kt", "mjs", "php", "py", "rb", "rs", "scala", "sh", "swift", "ts", "tsx", "vue"]);
 
 export function buildAgentPathInventory(filePaths: string[]): string {
+  return buildAgentPathGroups(filePaths)
+    .map((group) => `${group.path} (${group.fileCount} source files)\n${group.fileIds.map((filePath) => `  - ${filePath}`).join("\n")}`)
+    .join("\n");
+}
+
+export function buildAgentPathGroups(filePaths: string[]) {
   const groups = new Map<string, string[]>();
   for (const filePath of filePaths) {
     const parts = filePath.split("/");
@@ -87,20 +93,15 @@ export function buildAgentPathInventory(filePaths: string[]): string {
     groups.set(directory, paths);
   }
 
-  const selectedGroups = [...groups.entries()]
+  return [...groups.entries()]
     .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
-    .slice(0, MAX_INVENTORY_GROUPS);
-
-  if (selectedGroups.length === 0) return filePaths.slice(0, 60).map((filePath) => `- ${filePath}`).join("\n");
-
-  return selectedGroups
+    .slice(0, MAX_INVENTORY_GROUPS)
     .map(([directory, paths]) => {
       const representativePaths = paths
         .sort((a, b) => pathPriority(b) - pathPriority(a) || a.localeCompare(b))
         .slice(0, MAX_FILES_PER_GROUP);
-      return `${directory} (${paths.length} source files)\n${representativePaths.map((filePath) => `  - ${filePath}`).join("\n")}`;
-    })
-    .join("\n");
+      return { path: directory, fileCount: paths.length, fileIds: representativePaths };
+    });
 }
 
 function pathPriority(filePath: string): number {
@@ -109,23 +110,50 @@ function pathPriority(filePath: string): number {
   return 0;
 }
 
-function buildSystemPrompt(worldId: string, repositoryId: string, fileCount: number, filePaths: string[]): string {
-  return `You are CodeBiome's architecture agent for ${repositoryId} (${fileCount} files). You will make one focused submission per request.\n` +
-    `Use only exact file paths shown in this inventory as fileIds; it is a representative sample, not the full repository.\n` +
-    `For the modules phase, submit at most ${MAX_MODULES_PER_SUBMISSION} real modules and at most ${MAX_FILES_PER_MODULE} fileIds per module. Do not add unlisted files or descriptions. Set each module id equal to its path and importance from 0 to 1.\n` +
-    `For the dependencies phase, use only module ids returned by the successful modules submission. Submit only relationships supported by the repository structure; do not invent edges.\n` +
-    `Always pass worldId "${worldId}". If the evidence does not support a relationship, do not fabricate one.\n\n` +
-    `Repository path inventory:\n${buildAgentPathInventory(filePaths)}`;
+function moduleBatchMessages(worldId: string, repositoryId: string, fileCount: number, groups: ReturnType<typeof buildAgentPathGroups>, startIndex: number) {
+  const batch = groups.slice(startIndex, startIndex + MODULE_GROUPS_PER_BATCH);
+  const inventory = batch
+    .map((group) => `${group.path} (${group.fileCount} source files)\n${group.fileIds.map((fileId) => `  - ${fileId}`).join("\n")}`)
+    .join("\n");
+  return [
+    {
+      role: "system",
+      content: `You are mapping ${repositoryId} (${fileCount} files). Submit exactly one module for each listed directory group and no other modules. Use the exact group path as id and path; include all and only its listed fileIds. These are representative files, not the complete module contents. Set importance from 0 to 1. Always pass worldId "${worldId}".\n\n${inventory}`,
+    },
+    { role: "user", content: "Submit modules for this directory batch." },
+  ];
 }
 
-export function createDemoAgentRunState(worldId: string, repositoryId: string, fileCount: number, filePaths: string[]): DemoAgentRunState {
+function dependencyMessages(worldId: string, repositoryId: string, modules: { id: string; name: string; path: string }[], relationshipEvidence: string) {
+  return [
+    {
+      role: "system",
+      content: `Analyze dependencies for ${repositoryId}. Submit only edges supported by the source evidence below; do not infer dependencies from directory names alone. Match import paths and API route strings to the supplied module paths. If evidence is insufficient, submit fewer edges. Always pass worldId "${worldId}".\n\nModules:\n${modules.map((module) => `${module.id}: ${module.name} (${module.path})`).join("\n")}\n\nSource evidence:\n${relationshipEvidence || "No source-level relationship evidence was extracted."}`,
+    },
+    { role: "user", content: "Submit evidence-backed dependencies between these modules." },
+  ];
+}
+
+function frameworkMessages(worldId: string, repositoryId: string, manifestEvidence: string, relationshipEvidence: string) {
+  return [
+    {
+      role: "system",
+      content: `Identify technologies declared in these manifests and confirmed by source imports for ${repositoryId}. Use exact source file paths containing the imports as evidence so each technology can attach to a real module. Categories are frontend, backend, database, cache, queue, search, external-api, or fullstack. Include clear frameworks/infrastructure only, not generic utilities. Always pass worldId "${worldId}".\n\nManifests:\n${manifestEvidence}\n\nSource imports:\n${relationshipEvidence}`,
+    },
+    { role: "user", content: "Submit detected frameworks and infrastructure." },
+  ];
+}
+
+export function createDemoAgentRunState(worldId: string, repositoryId: string, fileCount: number, filePaths: string[], manifestEvidence = "", relationshipEvidence = ""): DemoAgentRunState {
+  const pathGroups = buildAgentPathGroups(filePaths);
   return {
     phase: "modules",
     attempts: 0,
-    messages: [
-      { role: "system", content: buildSystemPrompt(worldId, repositoryId, fileCount, filePaths) },
-      { role: "user", content: "Submit the repository's real module boundaries now." },
-    ],
+    moduleGroupIndex: 0,
+    pathGroups,
+    manifestEvidence,
+    relationshipEvidence,
+    messages: moduleBatchMessages(worldId, repositoryId, fileCount, pathGroups, 0),
   };
 }
 
@@ -155,7 +183,7 @@ export async function runDemoAgentStep(
 
   try {
     const { tools: mcpTools } = await client.listTools();
-    const toolName = run.phase === "modules" ? "submit_modules" : "submit_dependencies";
+    const toolName = run.phase === "modules" ? "submit_modules" : run.phase === "dependencies" ? "submit_dependencies" : "submit_frameworks";
     const tool = mcpTools.find((candidate) => candidate.name === toolName);
     if (!tool) throw new Error(`Required MCP tool ${toolName} is unavailable.`);
     const groqTool: ChatCompletionTool = {
@@ -246,25 +274,70 @@ export async function runDemoAgentStep(
       return { run: { ...run, messages, attempts: run.attempts + 1 }, done: false };
     }
 
-    const phase = run.phase === "modules" ? "dependencies" : "complete";
-    const nextRun: DemoAgentRunState = { phase, attempts: 0, messages };
-    if (phase === "complete") {
-      onEvent({ type: "done" });
-      return { run: nextRun, done: true };
+    const snapshot = await worldStore.getSnapshot(worldId);
+    if (!snapshot) throw new Error("World not found while continuing architecture analysis.");
+
+    if (run.phase === "modules") {
+      const moduleGroupIndex = run.moduleGroupIndex + MODULE_GROUPS_PER_BATCH;
+      if (moduleGroupIndex < run.pathGroups.length) {
+        return {
+          run: {
+            ...run,
+            attempts: 0,
+            moduleGroupIndex,
+            messages: moduleBatchMessages(
+              worldId,
+              snapshot.knowledgeModel.repository.id,
+              snapshot.knowledgeModel.files.length,
+              run.pathGroups,
+              moduleGroupIndex
+            ),
+          },
+          done: false,
+        };
+      }
+      return {
+        run: {
+          ...run,
+          phase: "dependencies",
+          attempts: 0,
+          messages: dependencyMessages(
+            worldId,
+            snapshot.knowledgeModel.repository.id,
+            snapshot.knowledgeModel.modules.map(({ id, name, path }) => ({ id, name, path })),
+            run.relationshipEvidence
+          ),
+        },
+        done: false,
+      };
     }
-    nextRun.messages.push({ role: "user", content: "Now submit supported dependencies between the modules you just submitted." });
-    return { run: nextRun, done: false };
+
+    if (run.phase === "dependencies" && (run.manifestEvidence.trim() || run.relationshipEvidence.trim())) {
+      return {
+        run: {
+          ...run,
+          phase: "frameworks",
+          attempts: 0,
+          messages: frameworkMessages(worldId, snapshot.knowledgeModel.repository.id, run.manifestEvidence, run.relationshipEvidence),
+        },
+        done: false,
+      };
+    }
+
+    const completedRun: DemoAgentRunState = { ...run, phase: "complete", attempts: 0, messages };
+    onEvent({ type: "done" });
+    return { run: completedRun, done: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Demo agent failed";
     if (/tool_use_failed|failed to parse tool call arguments|invalid_request_error/i.test(message) && run.attempts + 1 < MAX_PHASE_ATTEMPTS) {
-      onEvent({ type: "message", text: "Retrying the architecture submission with a smaller valid batch." });
+      onEvent({ type: "message", text: "Retrying the architecture submission with stricter evidence and smaller batches." });
       return {
         run: {
           ...run,
           attempts: run.attempts + 1,
           messages: [
             ...run.messages,
-            { role: "user", content: `The previous ${run.phase} tool arguments were rejected as malformed or too large. Retry with valid compact JSON. Submit at most ${MAX_MODULES_PER_SUBMISSION} modules and ${MAX_FILES_PER_MODULE} fileIds per module.` },
+            { role: "user", content: "The previous tool arguments were rejected as malformed or too large. Retry with valid compact JSON, using only the paths, modules, and evidence explicitly provided in the system message." },
           ],
         },
         done: false,
@@ -288,8 +361,9 @@ export async function runDemoAgentStep(
  * only what THIS in-process loop sends to Groq is trimmed.
  */
 const ESSENTIAL_TOOLS: Record<string, string> = {
-  submit_modules: "Submit real module boundaries you found: id/name/path/fileIds/importance (importance MUST be a number between 0 and 1, e.g. 0.9 for critical, 0.5 for moderate).",
+  submit_modules: "Submit one real module for each supplied directory group, using its exact path and listed file IDs. Importance must be between 0 and 1.",
   submit_dependencies: "Submit real dependency edges: fromId/toId/fromKind/toKind/relationship/confidence (confidence MUST be a number between 0 and 1).",
+  submit_frameworks: "Submit technologies declared in the supplied manifests: name/category/evidence/confidence. Use exact manifest file paths as evidence.",
 };
 
 /** Strips `description`/`title` keys from a JSON-schema tree — the per-field prose that helps a capable agent is pure token overhead for an 8K-TPM budget; type/enum/required constraints (what actually matters for a valid call) are untouched. */

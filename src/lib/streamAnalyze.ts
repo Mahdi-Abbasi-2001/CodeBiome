@@ -1,5 +1,7 @@
 import type { AnalyzeEvent } from "@/types/analyze-events";
 
+const MAX_AGENT_STEPS = 24;
+
 /** Reads the newline-delimited JSON stream from POST /api/analyze. */
 export async function streamAnalyze(url: string, onEvent: (event: AnalyzeEvent) => void): Promise<void> {
   const res = await fetch("/api/analyze", {
@@ -49,7 +51,7 @@ export async function streamAnalyze(url: string, onEvent: (event: AnalyzeEvent) 
   if (!worldId || agentUnavailable) return;
 
   try {
-    for (let step = 0; step < 4; step += 1) {
+    for (let step = 0; step < MAX_AGENT_STEPS; step += 1) {
       onEvent({ type: "agent_progress" });
       const heartbeat = setInterval(() => onEvent({ type: "agent_progress" }), 10_000);
       let stepResponse: Response;
