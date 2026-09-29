@@ -50,11 +50,11 @@ async function collectRelationshipEvidence(snapshot: RepositorySnapshot): Promis
     for (const [index, line] of content.split("\n").entries()) {
       if (!relevantLine.test(line)) continue;
       evidence.push(`${file.path}:${index + 1}: ${line.trim().slice(0, 240)}`);
-      if (evidence.length >= 60) return evidence.join("\n").slice(0, 12_000);
+      if (evidence.length >= 40) return evidence.join("\n").slice(0, 9_000);
     }
   }
 
-  return evidence.join("\n").slice(0, 12_000);
+  return evidence.join("\n").slice(0, 9_000);
 }
 
 /**

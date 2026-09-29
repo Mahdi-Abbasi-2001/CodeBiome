@@ -65,7 +65,7 @@ export function demoAgentAvailable(): boolean {
   return !!process.env.GROQ_API_KEY;
 }
 
-const MAX_OUTPUT_TOKENS = 2048;
+const MAX_OUTPUT_TOKENS = 4096;
 const MAX_TOOL_RESULT_CHARS = 2000;
 const MAX_PHASE_ATTEMPTS = 2;
 const MAX_INVENTORY_GROUPS = 32;
