@@ -4,7 +4,7 @@ import { buildRepositorySnapshot } from "@/server/ingestion/snapshotBuilder";
 import type { RepositorySnapshot } from "@/server/ingestion/types";
 import { seedKnowledgeModel } from "@/server/ingestion/seedKnowledgeModel";
 import { createWorldFromAnalysis } from "@/server/world/createWorldFromAnalysis";
-import { createDemoAgentRunState, demoAgentAvailable } from "@/server/demo-agent/runDemoAgent";
+import { buildAgentPathGroups, createDemoAgentRunState, demoAgentAvailable } from "@/server/demo-agent/runDemoAgent";
 import { worldStore } from "@/server/world/worldStore";
 import type { AnalyzeEvent } from "@/types/analyze-events";
 
@@ -34,31 +34,31 @@ async function collectManifestEvidence(snapshot: RepositorySnapshot): Promise<st
   return evidence.join("\n").slice(0, 10_000);
 }
 
-async function collectRelationshipEvidence(snapshot: RepositorySnapshot): Promise<string> {
+export async function collectRelationshipEvidence(snapshot: RepositorySnapshot): Promise<string> {
   const relevantLine = /\b(?:import|export|require\s*\(|fetch\s*\(|axios|router\.(?:route|get|post|put|patch|delete)\s*\()/i;
-  const files = snapshot.files
-    .filter((file) => !file.isBinary && file.sizeBytes <= 200_000 && /\.(?:[cm]?js|jsx|tsx?|vue|py|go|rs)$/i.test(file.path))
-    .sort((a, b) => {
-      const priority = (filePath: string) => /(?:api|route|controller|service|model|server)/i.test(filePath) ? 0 : 1;
-      return priority(a.path) - priority(b.path) || a.path.localeCompare(b.path);
-    })
-    .slice(0, 96);
+  const fileByPath = new Map(snapshot.files.map((file) => [file.path, file]));
+  const groups = buildAgentPathGroups(snapshot.files.map((file) => file.path));
   const evidenceByRoot = new Map<string, string[]>();
-  let totalLines = 0;
+  let totalCharacters = 0;
 
-  for (const file of files) {
-    const root = file.path.split("/")[0] || ".";
-    const rootEvidence = evidenceByRoot.get(root) ?? [];
-    if (rootEvidence.length >= 20) continue;
-    const content = await file.readContent();
-    for (const [index, line] of content.split("\n").entries()) {
-      if (!relevantLine.test(line)) continue;
-      rootEvidence.push(`${file.path}:${index + 1}: ${line.trim().slice(0, 240)}`);
-      totalLines += 1;
-      if (rootEvidence.length >= 20 || totalLines >= 60) break;
+  for (const group of groups) {
+    const groupEvidence: string[] = [];
+    for (const filePath of group.fileIds) {
+      const file = fileByPath.get(filePath);
+      if (!file || file.isBinary || file.sizeBytes > 200_000) continue;
+      const content = await file.readContent();
+      for (const [index, line] of content.split("\n").entries()) {
+        if (!relevantLine.test(line)) continue;
+        const entry = `${file.path}: ${line.trim().slice(0, 240)}`;
+        if (totalCharacters + entry.length > 9_000) break;
+        groupEvidence.push(entry);
+        totalCharacters += entry.length;
+        if (groupEvidence.length >= 4) break;
+      }
+      if (groupEvidence.length >= 4 || totalCharacters >= 9_000) break;
     }
-    evidenceByRoot.set(root, rootEvidence);
-    if (totalLines >= 60) break;
+    if (groupEvidence.length > 0) evidenceByRoot.set(group.path, groupEvidence);
+    if (totalCharacters >= 9_000) break;
   }
 
   return [...evidenceByRoot.values()].flat().join("\n").slice(0, 9_000);
