@@ -49,7 +49,7 @@ describe("demo-agent repository context", () => {
     const inventory = buildAgentPathInventory(filePaths);
     const listedPaths = inventory.match(/^\s+- (packages\/\S+)/gm)?.map((line) => line.trim().slice(2)) ?? [];
 
-    expect(listedPaths.length).toBeLessThanOrEqual(24 * 3);
+    expect(listedPaths.length).toBeLessThanOrEqual(16 * 2);
     expect(listedPaths.every((filePath) => filePaths.includes(filePath))).toBe(true);
     expect(inventory).not.toContain("README.md");
     expect(inventory).not.toContain("sample.test.ts");
@@ -63,6 +63,8 @@ describe("demo-agent repository context", () => {
     expect(systemMessage.content).toContain("src/index.ts");
     expect(systemMessage.content).toContain("src/services/api.ts");
     expect(systemMessage.content).toContain('worldId "world-1"');
+    expect(systemMessage.content).toContain("at most 8 real modules");
+    expect(systemMessage.content).toContain("at most 2 fileIds per module");
   });
 
   it("persists successful module and dependency phases through real MCP submissions", async () => {
@@ -73,6 +75,7 @@ describe("demo-agent repository context", () => {
     const previousKey = process.env.GROQ_API_KEY;
     process.env.GROQ_API_KEY = "test-key";
     groqCreate
+      .mockRejectedValueOnce(new Error('400 {"type":"invalid_request_error","code":"tool_use_failed","message":"Failed to parse tool call arguments as JSON"}'))
       .mockResolvedValueOnce({
         choices: [{ message: { content: null, tool_calls: [{ id: "modules-call", type: "function", function: { name: "submit_modules", arguments: JSON.stringify({
           worldId: world.id,
@@ -91,7 +94,12 @@ describe("demo-agent repository context", () => {
 
     try {
       const state = createDemoAgentRunState(world.id, world.repositoryId, model.files.length, model.files.map((file) => file.path));
-      const modulesStep = await runDemoAgentStep(world.id, state, () => undefined);
+      const retryStep = await runDemoAgentStep(world.id, state, () => undefined);
+      expect(retryStep.run.phase).toBe("modules");
+      expect(retryStep.run.attempts).toBe(1);
+      expect(retryStep.done).toBe(false);
+
+      const modulesStep = await runDemoAgentStep(world.id, retryStep.run, () => undefined);
       expect(modulesStep.run.phase).toBe("dependencies");
       expect(modulesStep.done).toBe(false);
 

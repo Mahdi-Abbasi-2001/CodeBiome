@@ -67,8 +67,10 @@ export function demoAgentAvailable(): boolean {
 const MAX_OUTPUT_TOKENS = 2048;
 const MAX_TOOL_RESULT_CHARS = 2000;
 const MAX_PHASE_ATTEMPTS = 2;
-const MAX_INVENTORY_GROUPS = 24;
-const MAX_FILES_PER_GROUP = 3;
+const MAX_INVENTORY_GROUPS = 16;
+const MAX_FILES_PER_GROUP = 2;
+const MAX_MODULES_PER_SUBMISSION = 8;
+const MAX_FILES_PER_MODULE = 2;
 
 const SOURCE_EXTENSIONS = new Set(["c", "cc", "cpp", "cs", "go", "h", "hpp", "java", "js", "jsx", "kt", "mjs", "php", "py", "rb", "rs", "scala", "sh", "swift", "ts", "tsx", "vue"]);
 
@@ -110,7 +112,7 @@ function pathPriority(filePath: string): number {
 function buildSystemPrompt(worldId: string, repositoryId: string, fileCount: number, filePaths: string[]): string {
   return `You are CodeBiome's architecture agent for ${repositoryId} (${fileCount} files). You will make one focused submission per request.\n` +
     `Use only exact file paths shown in this inventory as fileIds; it is a representative sample, not the full repository.\n` +
-    `For the modules phase, group related paths into at most 12 real modules. Set each module id equal to its path, use exact listed paths in fileIds, and set importance from 0 to 1.\n` +
+    `For the modules phase, submit at most ${MAX_MODULES_PER_SUBMISSION} real modules and at most ${MAX_FILES_PER_MODULE} fileIds per module. Do not add unlisted files or descriptions. Set each module id equal to its path and importance from 0 to 1.\n` +
     `For the dependencies phase, use only module ids returned by the successful modules submission. Submit only relationships supported by the repository structure; do not invent edges.\n` +
     `Always pass worldId "${worldId}". If the evidence does not support a relationship, do not fabricate one.\n\n` +
     `Repository path inventory:\n${buildAgentPathInventory(filePaths)}`;
@@ -183,6 +185,7 @@ export async function runDemoAgentStep(
       } catch (error) {
         lastError = error;
         const text = error instanceof Error ? error.message : String(error);
+        if (/tool_use_failed|failed to parse tool call arguments|invalid_request_error/i.test(text)) throw error;
         if (/model not found|unsupported model|unknown model|invalid model|not available/i.test(text)) continue;
         response = await groq.chat.completions.create({
           model: modelName,
@@ -253,6 +256,20 @@ export async function runDemoAgentStep(
     return { run: nextRun, done: false };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Demo agent failed";
+    if (/tool_use_failed|failed to parse tool call arguments|invalid_request_error/i.test(message) && run.attempts + 1 < MAX_PHASE_ATTEMPTS) {
+      onEvent({ type: "message", text: "Retrying the architecture submission with a smaller valid batch." });
+      return {
+        run: {
+          ...run,
+          attempts: run.attempts + 1,
+          messages: [
+            ...run.messages,
+            { role: "user", content: `The previous ${run.phase} tool arguments were rejected as malformed or too large. Retry with valid compact JSON. Submit at most ${MAX_MODULES_PER_SUBMISSION} modules and ${MAX_FILES_PER_MODULE} fileIds per module.` },
+          ],
+        },
+        done: false,
+      };
+    }
     onEvent({ type: "error", error: message });
     return { run: { ...run, phase: "failed", error: message }, done: true };
   } finally {
