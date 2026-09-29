@@ -134,18 +134,18 @@ export async function runDemoAgent(
     `The Architecture view only shows a module once it has a real detected relationship: a dependency edge to another module, a ` +
     `detected framework, or a linked infrastructure technology (database/cache/queue/external API). A module with none of those stays ` +
     `invisible even though it exists — so submitting modules alone is NOT enough to produce a useful result. In this exact order:\n` +
-    `1. Your FIRST tool call must be submit_modules. Use get_file on a few key files ` +
-    `(package.json, README.md, etc.) to understand the project structure if needed, then group ` +
-    `files into modules based on directory/naming conventions.\n` +
-    `2. Your SECOND tool call must be submit_dependencies, inferring real relationships from ` +
+    `1. Your FIRST tool call must be get_repository_overview to get the file tree.\n` +
+    `2. Your SECOND tool call must be submit_modules, using the file tree from the previous ` +
+    `call to group files into modules based on directory/naming conventions.\n` +
+    `3. Your THIRD tool call must be submit_dependencies, inferring real relationships from ` +
     `path/naming conventions (e.g. a "controllers" module calling a "services" module, a ` +
     `"routes"/"router" module depending on handlers, anything depending on a db/model/repository-named module). ` +
     `A small number of get_file calls to confirm a specific real edge is fine, but do not explore broadly first — ` +
     `infer from conventions, then verify only what you're unsure of. This step is what actually makes Architecture ` +
     `render — never skip or defer it.\n` +
-    `3. If a turn remains: submit_frameworks for any technology you can identify from path conventions ` +
+    `4. If a turn remains: submit_frameworks for any technology you can identify from path conventions ` +
     `or a package manifest (get_file package.json if useful).\n` +
-    `4. Only with turns still remaining: submit_entry_points, submit_security_findings, submit_code_health, submit_flow, submit_request_journey.\n\n` +
+    `5. Only with turns still remaining: submit_entry_points, submit_security_findings, submit_code_health, submit_flow, submit_request_journey.\n\n` +
     `Every fileId/moduleId you reference must be a REAL path — never invent one. Always pass worldId "${worldId}" ` +
     `explicitly on every call. Batch generously (every module/edge you know about in ONE call) rather than one tiny call per item. Stop ` +
     `calling tools and reply with a short summary as soon as modules, dependencies, and frameworks are submitted.`;
@@ -155,13 +155,13 @@ export async function runDemoAgent(
     { role: "user", content: "Analyze this repository now." },
   ];
 
-  // Force the first two tool calls to be submit_modules and
-  // submit_dependencies — the model otherwise gets distracted by the
-  // file tree and explores with get_file instead of submitting.
-  // If Groq rejects the forced choice (400), retry without it.
+  // Force the first three tool calls: get_repository_overview (to get
+  // the file tree), then submit_modules, then submit_dependencies.
+  // If Groq rejects a forced choice (400), retry without it.
   const FORCED_TOOLS: Record<number, string> = {
-    0: "submit_modules",
-    1: "submit_dependencies",
+    0: "get_repository_overview",
+    1: "submit_modules",
+    2: "submit_dependencies",
   };
 
   try {
