@@ -48,15 +48,17 @@ export async function collectRelationshipEvidence(snapshot: RepositorySnapshot):
       const file = fileByPath.get(filePath);
       if (!file || file.isBinary || file.sizeBytes > 200_000) continue;
       const content = await file.readContent();
-      let fileEvidenceCount = 0;
-      for (const [index, line] of content.split("\n").entries()) {
-        if (!relevantLine.test(line)) continue;
+      const evidenceLines = content.split("\n")
+        .map((line, index) => ({ line, index }))
+        .filter(({ line }) => relevantLine.test(line))
+        .sort((a, b) => evidenceLinePriority(b.line) - evidenceLinePriority(a.line) || a.index - b.index)
+        .slice(0, 2);
+      for (const { line } of evidenceLines) {
         const entry = `${file.path}: ${line.trim().slice(0, 240)}`;
         if (totalCharacters + entry.length > 9_000) break;
         groupEvidence.push(entry);
         totalCharacters += entry.length;
-        fileEvidenceCount += 1;
-        if (fileEvidenceCount >= 2 || groupEvidence.length >= 4) break;
+        if (groupEvidence.length >= 4) break;
       }
       if (groupEvidence.length >= 4 || totalCharacters >= 9_000) break;
     }
@@ -65,6 +67,12 @@ export async function collectRelationshipEvidence(snapshot: RepositorySnapshot):
   }
 
   return [...evidenceByRoot.values()].flat().join("\n").slice(0, 9_000);
+}
+
+function evidenceLinePriority(line: string): number {
+  if (/fetch\s*\(|router\.(?:route|get|post|put|patch|delete)\s*\(/i.test(line)) return 5;
+  if (/(socket\.io|stripe|mongoose|express|material-ui|react-router)/i.test(line)) return 4;
+  return 1;
 }
 
 export async function collectHttpDependencyHints(snapshot: RepositorySnapshot): Promise<DemoAgentDependencyHint[]> {

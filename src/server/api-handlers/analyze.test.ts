@@ -9,7 +9,10 @@ describe("collectRelationshipEvidence", () => {
       "client/product/api-product.js": "export const list = () => fetch('/api/products');\n",
       "server/routes/auction.routes.js": "import auctionCtrl from '../controllers/auction.controller';\nrouter.route('/api/auctions').get(auctionCtrl.list);\n",
       "server/controllers/auction.controller.js": "import Auction from '../models/auction.model';\n",
+      "server/controllers/user.controller.js": "import User from '../models/user.model';\nimport stripe from 'stripe';\n",
       "server/models/auction.model.js": "import mongoose from 'mongoose';\n",
+      "client/auction/Bidding.js": "import React from 'react';\nimport Button from '@material-ui/core/Button';\nconst io = require('socket.io-client');\n",
+      "client/cart/Checkout.js": "import React from 'react';\nimport Card from '@material-ui/core/Card';\nimport {Elements} from 'react-stripe-elements';\n",
     };
     const snapshot: RepositorySnapshot = {
       repositoryId: "owner/repo",
@@ -33,7 +36,10 @@ describe("collectRelationshipEvidence", () => {
     expect(evidence).toContain("client/auction/api-auction.js: export const list = () => fetch('/api/auctions')");
     expect(evidence).toContain("server/routes/auction.routes.js: router.route('/api/auctions')");
     expect(evidence).toContain("server/controllers/auction.controller.js: import Auction");
+    expect(evidence).toContain("server/controllers/user.controller.js: import stripe");
     expect(evidence).toContain("server/models/auction.model.js: import mongoose");
+    expect(evidence).toContain("client/auction/Bidding.js: const io = require('socket.io-client')");
+    expect(evidence).toContain("client/cart/Checkout.js: import {Elements} from 'react-stripe-elements'");
 
     const hints = await collectHttpDependencyHints(snapshot);
     expect(hints).toContainEqual({
